@@ -210,4 +210,8 @@ Please ensure all ingredient names follow the lowercase/stripped normalization c
 
 ## License
 
-This project does not currently specify a license. All rights reserved by the author unless otherwise stated. If you intend to use or distribute this code, please contact the repository owner to clarify licensing terms.
+This project is licensed under the **GNU General Public License v3.0**.
+
+You may copy, distribute and modify the software as long as you track changes/dates in source files. Any modifications to or software including (via compiler) GPL-licensed code must also be made available under the GPL along with build & install instructions.
+
+See the [LICENSE](LICENSE) file for the full license text.
