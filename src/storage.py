@@ -1,8 +1,8 @@
 import json
-import os
-import tempfile
 import threading
 from pathlib import Path
+
+from . import atomic_write_json
 from .dish import Dish
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,22 +21,15 @@ def load_dishes():
         return []
     if not isinstance(data, dict):
         return []
-    return [Dish.from_dict(p) for p in data.get("platos", [])]
+    result = []
+    for p in data.get("platos", []):
+        try:
+            result.append(Dish.from_dict(p))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return result
 
 
 def save_dishes(dishes):
-    JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = {"platos": [p.to_dict() for p in dishes]}
-    fd, tmp = tempfile.mkstemp(dir=str(JSON_PATH.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, str(JSON_PATH))
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(JSON_PATH, data)

@@ -30,7 +30,7 @@ def suggest_quick_shopping(dishes, available_ingredients, days_since_last):
         )
 
     result = [
-        (ing, ", ".join(sorted(list(data["dishes"]))), data["max_score"])
+        (ing, ", ".join(sorted(data["dishes"])), data["max_score"])
         for ing, data in best_by_ingredient.items()
     ]
     result.sort(key=lambda x: x[2], reverse=True)

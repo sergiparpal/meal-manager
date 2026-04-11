@@ -1,8 +1,8 @@
 import json
-import os
-import tempfile
 import threading
 from pathlib import Path
+
+from . import atomic_write_json
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRIDGE_PATH = BASE_DIR / "data" / "nevera.json"
@@ -36,17 +36,4 @@ def save_fridge(ingredients: list[str]) -> None:
     Args:
         ingredients: The full list of ingredient names to save.
     """
-    FRIDGE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(FRIDGE_PATH.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(ingredients, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, str(FRIDGE_PATH))
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(FRIDGE_PATH, ingredients)

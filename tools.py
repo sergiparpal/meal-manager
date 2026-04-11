@@ -135,8 +135,8 @@ def register_cooked_meal(args: dict, **kwargs) -> str:
         dish_name = args["dish_name"]
         name = dish_name.strip().lower()
 
-        # Hold dishes_lock for the entire read-check-use sequence so the
-        # catalog can't change between validation and ingredient lookup (C2).
+        # Snapshot the catalog under lock so validation and ingredient
+        # lookup see a consistent state.
         with dishes_lock:
             dishes = load_dishes()
             dish = next((p for p in dishes if p.name.strip().lower() == name), None)
@@ -144,7 +144,8 @@ def register_cooked_meal(args: dict, **kwargs) -> str:
         if dish is None:
             return json.dumps(f"Error: '{dish_name}' is not in the recipe catalog.", ensure_ascii=False)
 
-        register_cooked_dish(name, date.today().isoformat())
+        today = date.today()
+        register_cooked_dish(name, today.isoformat())
 
         essentials = [ing for ing, imp in dish.ingredients.items() if imp]
 
@@ -156,7 +157,7 @@ def register_cooked_meal(args: dict, **kwargs) -> str:
                 save_fridge(fridge)
 
         removed_msg = f" Removed from fridge: {', '.join(removed)}." if removed else ""
-        msg = f"Registered '{dish_name}' as cooked on {date.today().isoformat()}.{removed_msg}"
+        msg = f"Registered '{dish_name}' as cooked on {today.isoformat()}.{removed_msg}"
         return json.dumps(msg, ensure_ascii=False)
     except Exception as exc:
         return json.dumps({"error": str(exc)}, ensure_ascii=False)
@@ -185,19 +186,18 @@ def list_fridge(args: dict, **kwargs) -> str:
 
 def _normalize_ingredients(ingredients) -> dict:
     """Accept ingredients as dict {name: bool} or list [name, ...] (all essential).
-    Also handles JSON strings (some LLMs serialize the argument)."""
-    import json as _json
-    # Parse JSON string if needed
+    Also handles JSON strings (some LLMs serialize the argument).
+    Raises ValueError if the input cannot be parsed."""
     if isinstance(ingredients, str):
         try:
-            ingredients = _json.loads(ingredients)
-        except _json.JSONDecodeError:
-            pass
+            ingredients = json.loads(ingredients)
+        except json.JSONDecodeError:
+            raise ValueError(f"Cannot parse ingredients string: {ingredients!r}")
     if isinstance(ingredients, list):
         return {ing.strip().lower(): True for ing in ingredients if isinstance(ing, str) and ing.strip()}
     if isinstance(ingredients, dict):
         return {k.strip().lower(): v for k, v in ingredients.items()}
-    return {}
+    raise ValueError(f"ingredients must be a dict or list, got {type(ingredients).__name__}")
 
 
 def add_dish(args: dict, **kwargs) -> str:

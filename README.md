@@ -2,7 +2,7 @@
 
 An intelligent meal planning and fridge inventory management system structured as an official Hermes plugin. It helps users decide what to cook for dinner and what to buy at the grocery store by analyzing their current fridge contents, recipe catalog, and cooking history.
 
-An AI assistant invokes the eighteen tool handlers registered via `__init__.py:register(ctx)` to deliver personalized dinner suggestions, generate optimized shopping lists, manage fridge inventory, manage the recipe catalog, track cooked meals, and interactively build ingredient lists via the Dynamic Ingredient Interface (DII) — all with zero external dependencies.
+An AI assistant invokes the nineteen tool handlers registered via `__init__.py:register(ctx)` to deliver personalized dinner suggestions, generate optimized shopping lists, manage fridge inventory, manage the recipe catalog, track cooked meals, and interactively build ingredient lists via the Dynamic Ingredient Interface (DII) — all with zero external dependencies.
 
 ---
 
@@ -14,7 +14,7 @@ An AI assistant invokes the eighteen tool handlers registered via `__init__.py:r
 - **Cooking History Tracking** — Logs cooked meals with ISO dates so the suggestion engine avoids repetitive recommendations.
 - **Auto-Cleanup on Cook** — When a meal is registered as cooked, its essential ingredients are automatically removed from the fridge inventory.
 - **Essential vs. Optional Ingredients** — Recipes distinguish between must-have ingredients (required to cook) and nice-to-have ingredients (boost the suggestion score but are not blocking).
-- **Dynamic Ingredient Interface (DII)** — Interactive, stateful ingredient selection using Hermes' native `clarify` tool for step-by-step user interaction. A "probability funnel" reveals ranked ingredient suggestions one at a time, with add/skip/remove/manual-add controls presented as interactive options. Removing an essential ingredient triggers a recalculation signal so the agent can re-evaluate suggestions.
+- **Dynamic Ingredient Interface (DII)** — Interactive, stateful ingredient selection via plain text conversation. A "probability funnel" reveals ranked ingredient suggestions one at a time. The agent interprets free-text user responses (e.g. "sí", "pasa", "añade X") to drive add/skip/remove/manual-add controls. Removing an essential ingredient triggers a recalculation signal so the agent can re-evaluate suggestions.
 
 ---
 
@@ -52,14 +52,13 @@ An AI assistant invokes the eighteen tool handlers registered via `__init__.py:r
    python3 --version   # Should be 3.12+
    ```
 
-3. **Check that the data files exist:**
+3. **Run the integration test** to verify everything works:
 
    ```bash
-   ls data/
-   # Expected: platos.json  nevera.json  historial.json
+   python3 test_hermes.py
    ```
 
-No build step, dependency installation, or configuration is needed. The project is ready to use immediately after cloning.
+No build step, dependency installation, or configuration is needed. Data files under `data/` are created lazily by the tools when first needed.
 
 ---
 
@@ -67,7 +66,7 @@ No build step, dependency installation, or configuration is needed. The project 
 
 ### As a Hermes Plugin
 
-The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `__init__.py`. It registers eighteen tools:
+The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `__init__.py`. It registers nineteen tools:
 
 | Tool | Purpose |
 |---|---|
@@ -89,6 +88,7 @@ The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `_
 | `dii_add_manual` | Manually add a user-typed ingredient |
 | `dii_clear_all` | Clear all selected ingredients from the session |
 | `finalize_ingredient_session` | Commit session results to fridge and/or dish catalog |
+| `dii_get_state` | Get current DII session state without modifying it |
 
 All handlers follow the signature `def handler(args: dict, **kwargs) -> str` and return JSON strings.
 
@@ -96,29 +96,23 @@ See [`skill.md`](skill.md) for detailed instructions on when and how an AI assis
 
 ### Interactive Examples
 
-**Get dinner suggestions based on current fridge contents:**
+Since the module uses relative imports, standalone invocation requires bootstrapping the package via `importlib`. A helper one-liner:
 
 ```bash
-python3 -c "from tools import get_meal_suggestions; print(get_meal_suggestions({}))"
+# Get dinner suggestions based on current fridge contents
+python3 -c "
+import sys, importlib, pathlib
+sys.path.insert(0, str(pathlib.Path('.').resolve().parent))
+t = importlib.import_module('.tools', pathlib.Path('.').resolve().name)
+print(t.get_meal_suggestions({}))
+"
 ```
 
-**Add ingredients after a grocery run:**
+Replace `get_meal_suggestions({})` with any other tool call, e.g.:
 
-```bash
-python3 -c "from tools import update_fridge_inventory; print(update_fridge_inventory({'action': 'add', 'ingredients': ['huevos', 'arroz', 'pollo']}))"
-```
-
-**See what one ingredient could unlock:**
-
-```bash
-python3 -c "from tools import get_quick_shopping_list; print(get_quick_shopping_list({}))"
-```
-
-**Register a cooked meal:**
-
-```bash
-python3 -c "from tools import register_cooked_meal; print(register_cooked_meal({'dish_name': 'arroz con pollo'}))"
-```
+- `t.update_fridge_inventory({'action': 'add', 'ingredients': ['huevos', 'arroz']})`
+- `t.get_quick_shopping_list({})`
+- `t.register_cooked_meal({'dish_name': 'arroz con pollo'})`
 
 ### Running the Integration Test
 
@@ -126,7 +120,7 @@ python3 -c "from tools import register_cooked_meal; print(register_cooked_meal({
 python3 test_hermes.py
 ```
 
-This script exercises the core tools end-to-end against the live data files and prints the results to stdout.
+This script seeds its own test data, exercises all nineteen tools end-to-end, and restores the original data files afterwards.
 
 ---
 
@@ -136,7 +130,7 @@ This script exercises the core tools end-to-end against the live data files and 
 gestor-cenas-mejorado/
 ├── plugin.yaml            # Hermes plugin manifest (name + provided tools)
 ├── __init__.py            # Plugin entry point — register(ctx) wires tools + skill
-├── schemas.py             # JSON schemas for all eighteen tools (named constants)
+├── schemas.py             # JSON schemas for all nineteen tools (named constants)
 ├── tools.py               # Handler functions (args dict → JSON string)
 ├── skill.md               # Prompt instructions defining when/how to call each tool
 ├── CLAUDE.md              # Development guidelines for Claude Code

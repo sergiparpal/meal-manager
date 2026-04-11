@@ -33,7 +33,7 @@ _DATA_FILES = ["platos.json", "nevera.json", "historial.json"]
 
 
 def _backup():
-    _BACKUP_DIR.mkdir(exist_ok=True)
+    _BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     for name in _DATA_FILES:
         src = _DATA_DIR / name
         if src.exists():
@@ -147,6 +147,7 @@ dii_remove_ingredient = _tools.dii_remove_ingredient
 dii_add_manual = _tools.dii_add_manual
 dii_clear_all = _tools.dii_clear_all
 finalize_ingredient_session = _tools.finalize_ingredient_session
+dii_get_state = _tools.dii_get_state
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -466,6 +467,29 @@ def test_dii_finalize_options():
     check("did not commit to dish", state["committed_to_dish"] is False)
 
 
+def test_dii_get_state():
+    print("\n-- DII: dii_get_state --")
+    state = parse(init_ingredient_session({
+        "dish_name": "State Test",
+        "ingredients": ["a", "b", "c"],
+        "is_essential": [True, True, False],
+        "pre_select_top_n": 2,
+    }))
+    sid = state["session_id"]
+
+    result = parse(dii_get_state({"session_id": sid}))
+    check("returns session_id", result["session_id"] == sid)
+    check("returns dish_name", result["dish_name"] == "state test")
+    check("returns essentials", result["essential_ingredients"] == ["a", "b"])
+    check("returns current_suggestion", result["current_suggestion"]["ingredient"] == "c")
+    check("returns next_actions", len(result["next_actions"]) > 0)
+    check("not finalized", result["finalized"] is False)
+
+    # Error path: invalid session
+    err = parse(dii_get_state({"session_id": "bogus_id"}))
+    check("error for bad session_id", "error" in err, f"got: {err}")
+
+
 def test_dii_add_manual_empty():
     print("\n-- DII: add_manual empty ingredient --")
     state = parse(init_ingredient_session({
@@ -516,6 +540,7 @@ def main():
         test_dii_expired_session()
         test_dii_finalize_twice()
         test_dii_finalize_options()
+        test_dii_get_state()
         test_dii_add_manual_empty()
 
     finally:

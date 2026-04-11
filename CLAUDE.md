@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A meal planning and fridge inventory manager structured as a Hermes plugin. The entry point is `__init__.py:register(ctx)`, which registers eighteen tools and installs the skill. All state is persisted in JSON files under `data/`.
+A meal planning and fridge inventory manager structured as a Hermes plugin. The entry point is `__init__.py:register(ctx)`, which registers nineteen tools and installs the skill. All state is persisted in JSON files under `data/`.
 
 Python 3.12+, no external dependencies (stdlib only).
 
@@ -24,11 +24,11 @@ There is no build step, linter, or test framework. `test_hermes.py` is a script 
 
 ### Plugin wiring layer (top-level files)
 
-- **`__init__.py`** — `register(ctx)` wires all eighteen tools (schema from `schemas.py`, handler from `tools.py`) and installs `skill.md` into the Hermes context.
+- **`__init__.py`** — `register(ctx)` wires all nineteen tools (schema from `schemas.py`, handler from `tools.py`) and installs `skill.md` into the Hermes context.
 - **`schemas.py`** — Named constants (e.g. `GET_MEAL_SUGGESTIONS_SCHEMA`) holding the JSON schema for each tool.
 - **`tools.py`** — Eighteen handler functions, each `def handler(args: dict, **kwargs) -> str` returning `json.dumps()`. All wrap their body in try/except returning `{"error": "..."}` on failure.
 - **`plugin.yaml`** — Declares the plugin name (`gestor_cenas`) and lists provided tools.
-- **`skill.md`** — LLM-facing instructions for when/how to invoke each tool. The DII section instructs the agent to use Hermes' native `clarify` tool for interactive ingredient selection (up to 4 options per step, with automatic "Other" for free text).
+- **`skill.md`** — LLM-facing instructions for when/how to invoke each tool. The DII section instructs the agent to drive ingredient selection via plain text conversation, interpreting free-text user responses to call the appropriate DII tool.
 
 ### Domain modules (`src/`)
 
@@ -56,7 +56,7 @@ There is no build step, linter, or test framework. `test_hermes.py` is a script 
 - **All ingredient names are normalized to lowercase/stripped** throughout the codebase. Dish names are also lowercased for comparison.
 - **JSON keys are in Spanish** (`nombre`, `tiempo_prep`, `ingredientes`, `platos`) while Python code uses English names (`Dish`, `name`, `prep_time`, `ingredients`).
 - **DII probability funnel**: Sessions hold a hidden queue of ranked ingredients. Only one suggestion is revealed at a time. The LLM provides the ranked list; the tool layer manages the reveal-one-at-a-time state.
-- **DII user interaction via `clarify`**: The DII flow uses Hermes' native `clarify` tool to present options to the user as interactive buttons (up to 4 per step, plus automatic "Other" for free text). This replaces the original Telegram Inline Keyboard design, which was incompatible with the Hermes gateway. The DII tools themselves are platform-agnostic — only `skill.md` defines the presentation strategy.
+- **DII user interaction via conversation**: The DII flow uses plain text conversation — the agent presents one suggestion at a time and interprets the user's free-text response (e.g. "sí", "pasa", "añade X") to call the appropriate DII tool. The DII tools are platform-agnostic; `skill.md` defines the conversational presentation strategy.
 - **Recalculation signal**: When an essential ingredient is removed from a DII session, the tool returns `recalculation_needed: true`. The LLM decides whether to regenerate the ranked list — the tool layer never calls the LLM itself.
 - **DII session lifecycle**: `init_ingredient_session` → manipulate via add/skip/remove/manual/clear tools → `finalize_ingredient_session` commits to fridge and/or dish catalog. Sessions are in-memory with optional JSON persistence under `data/sessions/`.
 - **Relative imports throughout**: All internal imports use relative form (e.g. `from .src.storage import ...`, `from .dish import ...`) because Hermes loads the plugin as `hermes_plugins.gestor_cenas`. Absolute imports like `from src.xxx` would fail at runtime. The test file (`test_hermes.py`) bootstraps the package via `importlib` to make relative imports work when running standalone.

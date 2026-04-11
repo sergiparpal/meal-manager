@@ -5,16 +5,13 @@ ingredients is revealed one at a time (the "probability funnel").  Sessions
 live in memory with optional JSON backup for crash recovery.
 """
 
-from __future__ import annotations
-
 import json
-import os
-import tempfile
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from . import atomic_write_json
 from .dish import Dish
 from .fridge import load_fridge, save_fridge, fridge_lock
 from .storage import load_dishes, save_dishes, dishes_lock
@@ -80,21 +77,8 @@ def _now_iso() -> str:
 
 def _persist_session(session: DIISession) -> None:
     """Write session to data/sessions/{id}.json atomically."""
-    _SESSION_DIR.mkdir(parents=True, exist_ok=True)
     path = _SESSION_DIR / f"{session.session_id}.json"
-    fd, tmp = tempfile.mkstemp(dir=str(_SESSION_DIR), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(_session_to_full_dict(session), f, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, str(path))
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(path, _session_to_full_dict(session), indent=None)
 
 
 def _load_session_from_disk(session_id: str) -> DIISession | None:
@@ -204,10 +188,11 @@ def _session_to_response(session: DIISession, *, recalculation_needed: bool = Fa
         next_actions = []
         instructions = f"Sesion finalizada para '{session.dish_name}'. No hay mas acciones disponibles."
     elif awaiting_recalc:
-        next_actions = ["init_ingredient_session"]
+        next_actions = ["init_ingredient_session", "dii_add_manual", "dii_remove_ingredient", "dii_clear_all", "finalize_ingredient_session"]
         instructions = (
             f"La sesion necesita recalculacion. Llama init_ingredient_session con una nueva "
-            f"lista de ingredientes para '{session.dish_name}' (puedes reusar los ya seleccionados)."
+            f"lista de ingredientes para '{session.dish_name}' (puedes reusar los ya seleccionados). "
+            f"Tambien puedes anadir/quitar ingredientes manualmente o finalizar."
         )
     elif has_suggestion:
         suggestion = session.current_suggestion

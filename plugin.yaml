@@ -20,3 +20,4 @@ provides_tools:
   - dii_add_manual
   - dii_clear_all
   - finalize_ingredient_session
+  - dii_get_state

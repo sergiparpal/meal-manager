@@ -6,17 +6,16 @@ def calculate_score(dish, available_ingredients, days_since_last,
     if not dish.ingredients:
         return 0
 
-    else:
-        essentials = [ing for ing, imp in dish.ingredients.items() if imp]
-        optionals = [ing for ing, imp in dish.ingredients.items() if not imp]
+    essentials = [ing for ing, imp in dish.ingredients.items() if imp]
+    optionals = [ing for ing, imp in dish.ingredients.items() if not imp]
 
-        available_essentials = sum(1 for ing in essentials if ing in available_ingredients)
-        available_optionals = sum(1 for ing in optionals if ing in available_ingredients)
+    available_essentials = sum(1 for ing in essentials if ing in available_ingredients)
+    available_optionals = sum(1 for ing in optionals if ing in available_ingredients)
 
-        essential_percentage = available_essentials / len(essentials) if essentials else 1.0
-        optional_percentage = available_optionals / len(optionals) if optionals else 1.0
+    essential_percentage = available_essentials / len(essentials) if essentials else 1.0
+    optional_percentage = available_optionals / len(optionals) if optionals else 1.0
 
-        match_percentage = essential_percentage * 0.8 + optional_percentage * 0.2
+    match_percentage = essential_percentage * 0.8 + optional_percentage * 0.2
 
     normalized_time = min(days_since_last, 14) / 14.0
 
