@@ -10,7 +10,7 @@ import uuid
 from datetime import date
 
 from .src.storage import load_dishes, save_dishes, dishes_lock
-from .src.history import load_history, register_cooked_dish, remove_history_entry, history_lock
+from .src.history import load_history, set_history_entry, remove_history_entry
 from .src.dish import Dish
 from .src.suggestion import suggest_dishes
 from .src.shopping import suggest_quick_shopping
@@ -47,6 +47,22 @@ _MAX_FRIDGE_UPDATE = 200
 def _err(msg: str) -> str:
     """Build a consistent JSON error response."""
     return json.dumps({"error": msg}, ensure_ascii=False)
+
+
+def _normalize_dish_name(name: str) -> str:
+    normalized = Dish.normalize_name(name)
+    if not normalized:
+        raise ValueError("Dish name cannot be empty")
+    if len(normalized) > _MAX_NAME_LEN:
+        raise ValueError(f"Dish name too long (max {_MAX_NAME_LEN} chars)")
+    return normalized
+
+
+def _normalize_ingredient_name(name: str) -> str:
+    normalized = Dish.normalize_ingredient(name)
+    if not normalized:
+        raise ValueError("Ingredient name cannot be empty")
+    return normalized
 
 
 def _days_since_last_cook() -> dict[str, int]:
@@ -117,12 +133,15 @@ def update_fridge_inventory(args: dict, **kwargs) -> str:
         if action not in ("add", "remove"):
             raise ValueError(f"action must be 'add' or 'remove', got '{action}'")
 
+        if not isinstance(ingredients, list):
+            raise ValueError("ingredients must be an array")
+
         if len(ingredients) > _MAX_FRIDGE_UPDATE:
             raise ValueError(f"Too many ingredients (max {_MAX_FRIDGE_UPDATE})")
 
         ingredients = list(dict.fromkeys(
-            ing for raw in ingredients
-            if (ing := raw.strip().lower())
+            _normalize_ingredient_name(raw)
+            for raw in ingredients
         ))
 
         if not ingredients:
@@ -160,7 +179,7 @@ def update_fridge_inventory(args: dict, **kwargs) -> str:
 def register_cooked_meal(args: dict, **kwargs) -> str:
     try:
         dish_name = args["dish_name"]
-        name = Dish.normalize_name(dish_name)
+        name = _normalize_dish_name(dish_name)
 
         # Snapshot the catalog under lock so validation and ingredient
         # lookup see a consistent state.
@@ -172,16 +191,26 @@ def register_cooked_meal(args: dict, **kwargs) -> str:
             return json.dumps(f"Error: '{dish_name}' is not in the recipe catalog.", ensure_ascii=False)
 
         today = date.today()
-        register_cooked_dish(name, today.isoformat())
+        previous_history = set_history_entry(name, today.isoformat())
 
         essentials = [ing for ing, imp in dish.ingredients.items() if imp]
 
-        with fridge_lock:
-            fridge = load_fridge()
-            removed = [ing for ing in essentials if ing in fridge]
-            if removed:
-                fridge = [ing for ing in fridge if ing not in removed]
-                save_fridge(fridge)
+        try:
+            with fridge_lock:
+                fridge = load_fridge()
+                removed = [ing for ing in essentials if ing in fridge]
+                if removed:
+                    fridge = [ing for ing in fridge if ing not in removed]
+                    save_fridge(fridge)
+        except Exception:
+            try:
+                if previous_history is None:
+                    remove_history_entry(name)
+                else:
+                    set_history_entry(name, previous_history)
+            except Exception:
+                logger.exception("register_cooked_meal rollback failed")
+            raise
 
         removed_msg = f" Removed from fridge: {', '.join(removed)}." if removed else ""
         msg = f"Registered '{dish_name}' as cooked on {today.isoformat()}.{removed_msg}"
@@ -194,7 +223,7 @@ def register_cooked_meal(args: dict, **kwargs) -> str:
 def delete_history_entry(args: dict, **kwargs) -> str:
     try:
         dish_name = args["dish_name"]
-        name = Dish.normalize_name(dish_name)
+        name = _normalize_dish_name(dish_name)
         if remove_history_entry(name):
             msg = f"Removed '{name}' from cooking history."
         else:
@@ -224,9 +253,15 @@ def _normalize_ingredients(ingredients) -> dict:
         except json.JSONDecodeError:
             raise ValueError(f"Cannot parse ingredients string: {ingredients!r}")
     if isinstance(ingredients, list):
-        result = {ing.strip().lower(): True for ing in ingredients if isinstance(ing, str) and ing.strip()}
+        result = {}
+        for ing in ingredients:
+            result[_normalize_ingredient_name(ing)] = True
     elif isinstance(ingredients, dict):
-        result = {k.strip().lower(): v for k, v in ingredients.items()}
+        result = {}
+        for key, value in ingredients.items():
+            if not isinstance(value, bool):
+                raise ValueError(f"ingredient '{key}' must be true or false")
+            result[_normalize_ingredient_name(key)] = value
     else:
         raise ValueError(f"ingredients must be a dict or list, got {type(ingredients).__name__}")
     if len(result) > _MAX_INGREDIENTS:
@@ -237,10 +272,8 @@ def _normalize_ingredients(ingredients) -> dict:
 def add_dish(args: dict, **kwargs) -> str:
     try:
         name = args["name"]
-        if len(name) > _MAX_NAME_LEN:
-            raise ValueError(f"Dish name too long (max {_MAX_NAME_LEN} chars)")
         ingredients = _normalize_ingredients(args["ingredients"])
-        normalized = Dish.normalize_name(name)
+        normalized = _normalize_dish_name(name)
 
         with dishes_lock:
             dishes = load_dishes()
@@ -265,7 +298,7 @@ def add_dish(args: dict, **kwargs) -> str:
 def delete_dish(args: dict, **kwargs) -> str:
     try:
         dish_name = args["dish_name"]
-        name = Dish.normalize_name(dish_name)
+        name = _normalize_dish_name(dish_name)
 
         with dishes_lock:
             dishes = load_dishes()
@@ -275,7 +308,15 @@ def delete_dish(args: dict, **kwargs) -> str:
             save_dishes(remaining)
 
         # Clean up orphaned history entry for the deleted dish.
-        remove_history_entry(name)
+        try:
+            remove_history_entry(name)
+        except Exception:
+            try:
+                with dishes_lock:
+                    save_dishes(dishes)
+            except Exception:
+                logger.exception("delete_dish rollback failed")
+            raise
 
         msg = f"Deleted '{name}' from the catalog."
         return json.dumps(msg, ensure_ascii=False)
@@ -288,7 +329,7 @@ def edit_dish(args: dict, **kwargs) -> str:
     try:
         dish_name = args["dish_name"]
         ingredients = _normalize_ingredients(args["ingredients"])
-        name = Dish.normalize_name(dish_name)
+        name = _normalize_dish_name(dish_name)
 
         with dishes_lock:
             dishes = load_dishes()
@@ -311,6 +352,8 @@ def edit_dish(args: dict, **kwargs) -> str:
 def add_dishes_batch(args: dict, **kwargs) -> str:
     try:
         dishes_input = args["dishes"]
+        if not isinstance(dishes_input, list):
+            raise ValueError("dishes must be an array")
         if len(dishes_input) > _MAX_BATCH_SIZE:
             raise ValueError(f"Too many dishes in batch (max {_MAX_BATCH_SIZE})")
 
@@ -321,7 +364,9 @@ def add_dishes_batch(args: dict, **kwargs) -> str:
             added = []
             skipped = []
             for entry in dishes_input:
-                name = Dish.normalize_name(entry["name"])
+                if not isinstance(entry, dict):
+                    raise ValueError("each dish must be an object")
+                name = _normalize_dish_name(entry["name"])
                 if name in existing:
                     skipped.append(name)
                     continue
@@ -368,8 +413,7 @@ def clear_fridge(args: dict, **kwargs) -> str:
 def init_ingredient_session(args: dict, **kwargs) -> str:
     try:
         dish_name = args["dish_name"]
-        if len(dish_name) > _MAX_NAME_LEN:
-            raise ValueError(f"Dish name too long (max {_MAX_NAME_LEN} chars)")
+        dish_name = _normalize_dish_name(dish_name)
 
         ingredients = args["ingredients"]
         is_essential = args["is_essential"]
@@ -400,6 +444,12 @@ def init_ingredient_session(args: dict, **kwargs) -> str:
         if len(ingredients) > _MAX_INGREDIENTS:
             return _err(f"Too many ingredients (max {_MAX_INGREDIENTS})")
 
+        for ing in ingredients:
+            _normalize_ingredient_name(ing)
+        for flag in is_essential:
+            if not isinstance(flag, bool):
+                return _err("is_essential must contain boolean values")
+
         # Convert flat parallel arrays to internal format
         ranked = [
             {"ingredient": ing, "is_essential": ess, "confidence": 0.5}
@@ -412,6 +462,8 @@ def init_ingredient_session(args: dict, **kwargs) -> str:
             pre_select = int(pre_select)
         except (TypeError, ValueError):
             pre_select = 3
+        if pre_select < 0:
+            return _err("pre_select_top_n must be >= 0")
 
         session = create_session(
             session_id=uuid.uuid4().hex[:16],
@@ -454,13 +506,14 @@ def dii_remove_ingredient(args: dict, **kwargs) -> str:
 
 def dii_add_manual(args: dict, **kwargs) -> str:
     try:
-        ingredient = args["ingredient"].strip()
-        if not ingredient:
-            return _err("Ingredient name cannot be empty")
+        ingredient = _normalize_ingredient_name(args["ingredient"])
+        is_essential = args.get("is_essential", True)
+        if not isinstance(is_essential, bool):
+            raise ValueError("is_essential must be a boolean")
         result = dii_add_manual_impl(
             args["session_id"],
             ingredient,
-            args.get("is_essential", True),
+            is_essential,
         )
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:
@@ -479,10 +532,16 @@ def dii_clear_all(args: dict, **kwargs) -> str:
 
 def finalize_ingredient_session(args: dict, **kwargs) -> str:
     try:
+        commit_to_fridge = args.get("commit_to_fridge", True)
+        commit_to_dish = args.get("commit_to_dish", True)
+        if not isinstance(commit_to_fridge, bool):
+            raise ValueError("commit_to_fridge must be a boolean")
+        if not isinstance(commit_to_dish, bool):
+            raise ValueError("commit_to_dish must be a boolean")
         result = dii_finalize_session_impl(
             args["session_id"],
-            commit_to_fridge=args.get("commit_to_fridge", True),
-            commit_to_dish=args.get("commit_to_dish", True),
+            commit_to_fridge=commit_to_fridge,
+            commit_to_dish=commit_to_dish,
         )
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:

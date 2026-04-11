@@ -12,6 +12,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Bootstrap: make relative imports work when running standalone.
@@ -117,7 +118,7 @@ def check(label: str, condition: bool, detail: str = ""):
         print(msg)
 
 
-def parse(raw: str) -> dict | list | str:
+def parse(raw: str) -> Any:
     return json.loads(raw)
 
 
@@ -126,6 +127,8 @@ def parse(raw: str) -> dict | list | str:
 # ---------------------------------------------------------------------------
 
 _tools = importlib.import_module(".tools", _PLUGIN_DIR.name)
+_history_mod = importlib.import_module(".src.history", _PLUGIN_DIR.name)
+_dii_mod = importlib.import_module(".src.dii", _PLUGIN_DIR.name)
 
 get_meal_suggestions = _tools.get_meal_suggestions
 get_quick_shopping_list = _tools.get_quick_shopping_list
@@ -223,6 +226,23 @@ def test_register_cooked_meal_bogus():
     check("returns error", isinstance(result, str) and "error" in result.lower())
 
 
+def test_register_cooked_meal_rollback():
+    print("\n-- register_cooked_meal (rollback) --")
+    before = _history_mod.load_history()
+
+    original_save_fridge = _tools.save_fridge
+    try:
+        def fail_save_fridge(_fridge):
+            raise RuntimeError("boom")
+
+        setattr(_tools, "save_fridge", fail_save_fridge)
+        result = parse(register_cooked_meal({"dish_name": "tortilla de patatas"}))
+        check("returns error on fridge failure", isinstance(result, dict) and "error" in result)
+        check("history restored after failure", _history_mod.load_history() == before)
+    finally:
+        setattr(_tools, "save_fridge", original_save_fridge)
+
+
 def test_delete_history_entry():
     print("\n-- delete_history_entry --")
     result = parse(delete_history_entry({"dish_name": "arroz con pollo"}))
@@ -260,6 +280,21 @@ def test_add_dish_duplicate():
         "ingredients": {"lechuga": True},
     }))
     check("returns error for duplicate", isinstance(result, str) and "error" in result.lower())
+
+
+def test_add_dish_invalid_inputs():
+    print("\n-- add_dish (invalid inputs) --")
+    blank_name = parse(add_dish({
+        "name": "   ",
+        "ingredients": {"lechuga": True},
+    }))
+    check("rejects blank name", isinstance(blank_name, dict) and "error" in blank_name)
+
+    bad_ingredient = parse(add_dish({
+        "name": "Sopa Rara",
+        "ingredients": {"caldo": "yes"},
+    }))
+    check("rejects non-boolean ingredient values", isinstance(bad_ingredient, dict) and "error" in bad_ingredient)
 
 
 def test_edit_dish():
@@ -304,6 +339,35 @@ def test_add_dishes_batch():
     check("returns dict with added/skipped", isinstance(result, dict) and "added" in result)
     check("added 2 dishes", len(result["added"]) == 2, f"got {result['added']}")
     check("skipped 1 duplicate", len(result["skipped"]) == 1, f"got {result['skipped']}")
+
+
+def test_dii_finalize_rollback():
+    print("\n-- DII: finalize rollback --")
+    fridge_before = parse(list_fridge({}))
+    state = parse(init_ingredient_session({
+        "dish_name": "Rollback Test",
+        "ingredients": ["harina"],
+        "is_essential": [True],
+        "pre_select_top_n": 1,
+    }))
+    sid = state["session_id"]
+
+    original_save_dishes = _dii_mod.save_dishes
+    try:
+        def fail_save_dishes(_dishes):
+            raise RuntimeError("boom")
+
+        setattr(_dii_mod, "save_dishes", fail_save_dishes)
+        result = parse(finalize_ingredient_session({"session_id": sid}))
+        check("returns error on dish failure", isinstance(result, dict) and "error" in result)
+        check("fridge rolled back after failure", parse(list_fridge({})) == fridge_before)
+    finally:
+        setattr(_dii_mod, "save_dishes", original_save_dishes)
+        parse(finalize_ingredient_session({
+            "session_id": sid,
+            "commit_to_fridge": False,
+            "commit_to_dish": False,
+        }))
 
 
 def test_clear_fridge():
@@ -519,11 +583,13 @@ def main():
         test_get_quick_shopping_list()
         test_register_cooked_meal()
         test_register_cooked_meal_bogus()
+        test_register_cooked_meal_rollback()
         test_delete_history_entry()
         test_delete_history_entry_bogus()
         test_add_dish_dict()
         test_add_dish_list()
         test_add_dish_duplicate()
+        test_add_dish_invalid_inputs()
         test_edit_dish()
         test_edit_dish_bogus()
         test_delete_dish()
@@ -538,6 +604,7 @@ def main():
         test_dii_expired_session()
         test_dii_finalize_twice()
         test_dii_finalize_options()
+        test_dii_finalize_rollback()
         test_dii_get_state()
         test_dii_add_manual_empty()
 

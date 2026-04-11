@@ -122,6 +122,38 @@ def test_dish_from_dict():
     check("missing ingredients = empty dict", dish3.ingredients == {})
 
 
+def test_dish_from_dict_invalid():
+    print("\n-- Dish.from_dict (invalid) --")
+    try:
+        Dish.from_dict({"name": "Soup", "ingredients": []})
+        check("rejects non-dict ingredients", False, "should have raised ValueError")
+    except ValueError:
+        check("rejects non-dict ingredients", True)
+
+    try:
+        Dish.from_dict({"name": "   ", "ingredients": {}})
+        check("rejects blank name", False, "should have raised ValueError")
+    except ValueError:
+        check("rejects blank name", True)
+
+
+def test_dish_add_ingredient_validation():
+    print("\n-- Dish.add_ingredient (validation) --")
+    dish = Dish(name="test")
+
+    try:
+        dish.add_ingredient("   ", True)
+        check("rejects blank ingredient", False, "should have raised ValueError")
+    except ValueError:
+        check("rejects blank ingredient", True)
+
+    try:
+        dish.add_ingredient("salt", "yes")
+        check("rejects non-bool flags", False, "should have raised ValueError")
+    except ValueError:
+        check("rejects non-bool flags", True)
+
+
 def test_dish_add_ingredient():
     print("\n-- Dish.add_ingredient --")
     dish = Dish(name="test")
@@ -322,7 +354,9 @@ def main():
     test_dish_can_cook_with_only_optional()
     test_dish_to_dict()
     test_dish_from_dict()
+    test_dish_from_dict_invalid()
     test_dish_add_ingredient()
+    test_dish_add_ingredient_validation()
 
     test_calculate_score_basic()
     test_calculate_score_cooldown()

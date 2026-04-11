@@ -6,15 +6,19 @@ live in memory with optional JSON backup for crash recovery.
 """
 
 import json
+import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 from . import atomic_write_json
 from .dish import Dish
 from .fridge import load_fridge, save_fridge, fridge_lock
 from .storage import load_dishes, save_dishes, dishes_lock
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -202,6 +206,7 @@ def _session_to_response(session: DIISession, *, recalculation_needed: bool = Fa
             f"You can also add/remove ingredients manually or finalize."
         )
     elif has_suggestion:
+        assert session.current_suggestion is not None
         suggestion = session.current_suggestion
         ing_name = suggestion.get("ingredient", "?")
         is_ess = "essential" if suggestion.get("is_essential", True) else "optional"
@@ -303,32 +308,55 @@ def create_session(
     _cleanup_expired()
 
     now = _now_iso()
+    normalized_dish_name = Dish.normalize_name(dish_name)
+    if not normalized_dish_name:
+        raise ValueError("Dish name cannot be empty")
+    if not isinstance(pre_select_top_n, int) or isinstance(pre_select_top_n, bool):
+        raise ValueError("pre_select_top_n must be an integer")
+    if pre_select_top_n < 0:
+        raise ValueError("pre_select_top_n must be >= 0")
+
     session = DIISession(
         session_id=session_id,
-        dish_name=Dish.normalize_name(dish_name),
+        dish_name=normalized_dish_name,
         created_at=now,
         last_activity=now,
     )
 
     # Validate, normalize, and deduplicate ranked ingredients
+    if not isinstance(ranked_ingredients, list):
+        raise ValueError("ranked_ingredients must be a list")
     seen: set[str] = set()
     cleaned: list[dict] = []
     for item in ranked_ingredients:
-        name = Dish.normalize_ingredient(item["ingredient"])
-        if not name or name in seen:
+        if not isinstance(item, dict):
+            raise ValueError("ranked_ingredients must contain objects")
+        if "ingredient" not in item:
+            raise ValueError("ranked_ingredients items must include ingredient")
+        item_dict = cast(dict[str, object], item)
+        name = Dish.normalize_ingredient(item_dict["ingredient"])
+        if not name:
+            raise ValueError("ingredient name cannot be empty")
+        if name in seen:
             continue
-        item["ingredient"] = name
+        item_dict["ingredient"] = name
         # Coerce confidence to float in [0, 1], default 0.5
-        conf = item.get("confidence", 0.5)
-        try:
-            conf = float(conf)
-        except (TypeError, ValueError):
+        conf_value = item_dict.get("confidence", 0.5)
+        if isinstance(conf_value, (int, float, str)):
+            try:
+                conf = float(cast(float | int | str, conf_value))
+            except (TypeError, ValueError):
+                conf = 0.5
+        else:
             conf = 0.5
-        item["confidence"] = max(0.0, min(1.0, conf))
+        item_dict["confidence"] = max(0.0, min(1.0, conf))
         # Coerce is_essential to bool, default True
-        item["is_essential"] = bool(item.get("is_essential", True))
+        is_essential = item_dict.get("is_essential", True)
+        if not isinstance(is_essential, bool):
+            raise ValueError("is_essential must be a boolean")
+        item_dict["is_essential"] = is_essential
         seen.add(name)
-        cleaned.append(item)
+        cleaned.append(item_dict)
 
     pre_selected = cleaned[:pre_select_top_n]
     remaining = cleaned[pre_select_top_n:]
@@ -399,6 +427,8 @@ def remove_ingredient(session_id: str, ingredient: str) -> dict:
     with _get_lock(session_id):
         session = _require_session(session_id)
         name = Dish.normalize_ingredient(ingredient)
+        if not name:
+            raise ValueError("Ingredient name cannot be empty")
         recalc = False
 
         if name in session.essential_ingredients:
@@ -421,6 +451,8 @@ def add_manual_ingredient(session_id: str, ingredient: str, is_essential: bool =
     """Add a user-typed ingredient not from the funnel."""
     with _get_lock(session_id):
         session = _require_session(session_id)
+        if not isinstance(is_essential, bool):
+            raise ValueError("is_essential must be a boolean")
         name = Dish.normalize_ingredient(ingredient)
 
         if not name:
@@ -472,6 +504,11 @@ def finalize_session(
     commit_to_dish: bool = True,
 ) -> dict:
     """Commit session results to fridge and/or dish catalog."""
+    if not isinstance(commit_to_fridge, bool):
+        raise ValueError("commit_to_fridge must be a boolean")
+    if not isinstance(commit_to_dish, bool):
+        raise ValueError("commit_to_dish must be a boolean")
+
     with _get_lock(session_id):
         session = get_session(session_id)
         if session is None:
@@ -487,38 +524,49 @@ def finalize_session(
 
         committed_fridge = False
         committed_dish = False
+        fridge_snapshot: list[str] | None = None
 
         if commit_to_fridge and all_ingredients:
             with fridge_lock:
                 fridge = load_fridge()
+                fridge_snapshot = list(fridge)
                 added = [ing for ing in all_ingredients if ing not in fridge]
                 if added:
                     fridge.extend(added)
                     save_fridge(fridge)
                 committed_fridge = bool(added)
 
-        if commit_to_dish:
-            with dishes_lock:
-                dishes = load_dishes()
-                ingredient_map = {}
-                for ing in session.essential_ingredients:
-                    ingredient_map[ing] = True
-                for ing in session.optional_ingredients:
-                    ingredient_map[ing] = False
+        try:
+            if commit_to_dish:
+                with dishes_lock:
+                    dishes = load_dishes()
+                    ingredient_map = {}
+                    for ing in session.essential_ingredients:
+                        ingredient_map[ing] = True
+                    for ing in session.optional_ingredients:
+                        ingredient_map[ing] = False
 
-                existing = next(
-                    (d for d in dishes if d.name.strip().lower() == session.dish_name),
-                    None,
-                )
-                if existing is not None:
-                    existing.ingredients = ingredient_map
-                else:
-                    new_dish = Dish(name=session.dish_name)
-                    for ing, essential in ingredient_map.items():
-                        new_dish.add_ingredient(ing, essential)
-                    dishes.append(new_dish)
-                save_dishes(dishes)
-                committed_dish = True
+                    existing = next(
+                        (d for d in dishes if d.name.strip().lower() == session.dish_name),
+                        None,
+                    )
+                    if existing is not None:
+                        existing.ingredients = ingredient_map
+                    else:
+                        new_dish = Dish(name=session.dish_name)
+                        for ing, essential in ingredient_map.items():
+                            new_dish.add_ingredient(ing, essential)
+                        dishes.append(new_dish)
+                    save_dishes(dishes)
+                    committed_dish = True
+        except Exception:
+            if committed_fridge and fridge_snapshot is not None:
+                try:
+                    with fridge_lock:
+                        save_fridge(fridge_snapshot)
+                except Exception:
+                    logger.exception("finalize_session fridge rollback failed")
+            raise
 
         session.finalized = True
         session.pending_recalculation = False
@@ -529,9 +577,12 @@ def finalize_session(
         resp["committed_to_dish"] = committed_dish
 
         # Clean up: remove from memory and disk to prevent unbounded growth (H1).
-        with _global_lock:
-            _sessions.pop(session_id, None)
-            _session_locks.pop(session_id, None)
-        _delete_session_file(session_id)
+        try:
+            with _global_lock:
+                _sessions.pop(session_id, None)
+                _session_locks.pop(session_id, None)
+            _delete_session_file(session_id)
+        except Exception:
+            logger.exception("finalize_session cleanup failed")
 
         return resp

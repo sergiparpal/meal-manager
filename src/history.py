@@ -32,10 +32,18 @@ def load_history():
 
 
 def register_cooked_dish(dish_name, date_str):
+    set_history_entry(dish_name, date_str)
+
+
+def set_history_entry(dish_name, date_str):
+    """Store or replace a cooking-history entry and return the previous value."""
     with history_lock:
         history = load_history()
-        history[dish_name.strip().lower()] = date_str if isinstance(date_str, str) else date_str.isoformat()
+        key = dish_name.strip().lower()
+        previous = history.get(key)
+        history[key] = date_str if isinstance(date_str, str) else date_str.isoformat()
         atomic_write_json(HISTORY_PATH, history)
+        return previous
 
 
 def remove_history_entry(dish_name: str) -> bool:

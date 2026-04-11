@@ -25,7 +25,7 @@ def load_dishes():
     for p in data.get("dishes", []):
         try:
             result.append(Dish.from_dict(p))
-        except (KeyError, TypeError, ValueError):
+        except (AttributeError, KeyError, TypeError, ValueError):
             continue
     return result
 
