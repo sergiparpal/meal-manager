@@ -1,4 +1,4 @@
-"""JSON schemas for every gestor_cenas tool.
+"""JSON schemas for every meal_manager tool.
 
 Each constant is a complete JSON-schema dict ready to pass to
 ctx.register_tool(). The top-level ``description`` tells the LLM when and

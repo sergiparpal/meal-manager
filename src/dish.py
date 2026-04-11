@@ -22,14 +22,14 @@ class Dish:
 
     def to_dict(self):
         return {
-            "nombre": self.name,
-            "tiempo_prep": self.prep_time,
-            "ingredientes": self.ingredients
+            "name": self.name,
+            "prep_time": self.prep_time,
+            "ingredients": self.ingredients
         }
 
     @classmethod
     def from_dict(cls, data):
-        dish = cls(name=data["nombre"].strip().lower(), prep_time=data["tiempo_prep"])
-        raw = data.get("ingredientes", {})
+        dish = cls(name=data["name"].strip().lower(), prep_time=data["prep_time"])
+        raw = data.get("ingredients", {})
         dish.ingredients = {cls.normalize_ingredient(k): v for k, v in raw.items()}
         return dish

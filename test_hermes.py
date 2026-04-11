@@ -1,4 +1,4 @@
-"""Integration smoke test for all 18 gestor_cenas tools.
+"""Integration smoke test for all 18 meal_manager tools.
 
 Backs up data files before running and restores them afterwards so the test
 is idempotent and never pollutes live data.
@@ -29,7 +29,7 @@ _pkg = importlib.import_module(_PLUGIN_DIR.name)
 
 _DATA_DIR = Path(__file__).resolve().parent / "data"
 _BACKUP_DIR = _DATA_DIR / "_test_backup"
-_DATA_FILES = ["platos.json", "nevera.json", "historial.json"]
+_DATA_FILES = ["dishes.json", "fridge.json", "history.json"]
 
 
 def _backup():
@@ -68,26 +68,26 @@ def _restore():
 
 def _seed():
     """Write known initial state so tests are deterministic."""
-    (_DATA_DIR / "platos.json").write_text(json.dumps({
-        "platos": [
+    (_DATA_DIR / "dishes.json").write_text(json.dumps({
+        "dishes": [
             {
-                "nombre": "Arroz con Pollo",
-                "tiempo_prep": 30,
-                "ingredientes": {"arroz": True, "pollo": True, "pimientos": False},
+                "name": "Arroz con Pollo",
+                "prep_time": 30,
+                "ingredients": {"arroz": True, "pollo": True, "pimientos": False},
             },
             {
-                "nombre": "Tortilla de patatas",
-                "tiempo_prep": 25,
-                "ingredientes": {"huevos": True, "patatas": True, "cebolla": False},
+                "name": "Tortilla de patatas",
+                "prep_time": 25,
+                "ingredients": {"huevos": True, "patatas": True, "cebolla": False},
             },
         ]
     }, ensure_ascii=False), encoding="utf-8")
 
-    (_DATA_DIR / "nevera.json").write_text(
+    (_DATA_DIR / "fridge.json").write_text(
         json.dumps(["arroz", "patatas"], ensure_ascii=False), encoding="utf-8"
     )
 
-    (_DATA_DIR / "historial.json").write_text(
+    (_DATA_DIR / "history.json").write_text(
         json.dumps({"tortilla de patatas": "2026-03-20"}, ensure_ascii=False),
         encoding="utf-8",
     )

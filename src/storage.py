@@ -6,7 +6,7 @@ from . import atomic_write_json
 from .dish import Dish
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-JSON_PATH = BASE_DIR / "data" / "platos.json"
+JSON_PATH = BASE_DIR / "data" / "dishes.json"
 
 dishes_lock = threading.Lock()
 
@@ -22,7 +22,7 @@ def load_dishes():
     if not isinstance(data, dict):
         return []
     result = []
-    for p in data.get("platos", []):
+    for p in data.get("dishes", []):
         try:
             result.append(Dish.from_dict(p))
         except (KeyError, TypeError, ValueError):
@@ -31,5 +31,5 @@ def load_dishes():
 
 
 def save_dishes(dishes):
-    data = {"platos": [p.to_dict() for p in dishes]}
+    data = {"dishes": [p.to_dict() for p in dishes]}
     atomic_write_json(JSON_PATH, data)

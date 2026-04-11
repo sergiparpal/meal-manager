@@ -1,4 +1,4 @@
-"""Tool handlers for the gestor_cenas plugin.
+"""Tool handlers for the meal_manager plugin.
 
 Every handler follows the signature ``def handler(args: dict, **kwargs) -> str``
 and returns a ``json.dumps()`` string.

@@ -5,7 +5,7 @@ from pathlib import Path
 from . import atomic_write_json
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-HISTORY_PATH = BASE_DIR / "data" / "historial.json"
+HISTORY_PATH = BASE_DIR / "data" / "history.json"
 
 history_lock = threading.Lock()
 

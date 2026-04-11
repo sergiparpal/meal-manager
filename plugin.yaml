@@ -1,4 +1,4 @@
-name: gestor_cenas
+name: meal_manager
 description: Meal planning and fridge inventory manager for Hermes agents.
 
 provides_tools:

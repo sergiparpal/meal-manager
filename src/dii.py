@@ -186,31 +186,31 @@ def _session_to_response(session: DIISession, *, recalculation_needed: bool = Fa
     # Build next_actions based on state
     if is_finalized:
         next_actions = []
-        instructions = f"Sesion finalizada para '{session.dish_name}'. No hay mas acciones disponibles."
+        instructions = f"Session finalized for '{session.dish_name}'. No more actions available."
     elif awaiting_recalc:
         next_actions = ["init_ingredient_session", "dii_add_manual", "dii_remove_ingredient", "dii_clear_all", "finalize_ingredient_session"]
         instructions = (
-            f"La sesion necesita recalculacion. Llama init_ingredient_session con una nueva "
-            f"lista de ingredientes para '{session.dish_name}' (puedes reusar los ya seleccionados). "
-            f"Tambien puedes anadir/quitar ingredientes manualmente o finalizar."
+            f"The session needs recalculation. Call init_ingredient_session with a new "
+            f"ingredient list for '{session.dish_name}' (you can reuse the already selected ones). "
+            f"You can also add/remove ingredients manually or finalize."
         )
     elif has_suggestion:
         suggestion = session.current_suggestion
         ing_name = suggestion.get("ingredient", "?")
-        is_ess = "esencial" if suggestion.get("is_essential", True) else "opcional"
+        is_ess = "essential" if suggestion.get("is_essential", True) else "optional"
         next_actions = ["dii_add_suggested", "dii_skip_suggested", "dii_remove_ingredient", "dii_add_manual", "finalize_ingredient_session"]
         instructions = (
-            f"Sugerencia actual: '{ing_name}' ({is_ess}). "
-            f"Pregunta al usuario si quiere anadirlo, saltarlo, o escribir otro ingrediente."
+            f"Current suggestion: '{ing_name}' ({is_ess}). "
+            f"Ask the user whether to add it, skip it, or type another ingredient."
         )
     elif queue_empty:
         next_actions = ["dii_add_manual", "finalize_ingredient_session"]
         instructions = (
-            f"No hay mas sugerencias. Puedes anadir ingredientes manualmente o finalizar la sesion."
+            f"No more suggestions. You can add ingredients manually or finalize the session."
         )
     else:
         next_actions = ["dii_add_manual", "finalize_ingredient_session"]
-        instructions = f"Estado inesperado. Considera finalizar o reiniciar la sesion."
+        instructions = f"Unexpected state. Consider finalizing or restarting the session."
     
     return {
         "session_id": session.session_id,

@@ -1,4 +1,4 @@
-"""gestor_cenas – Hermes plugin entry point."""
+"""meal_manager – Hermes plugin entry point."""
 
 from pathlib import Path
 
@@ -70,9 +70,9 @@ _TOOLS = [
 
 
 def register(ctx):
-    """Register all gestor_cenas tools and the skill with the Hermes context."""
+    """Register all meal_manager tools and the skill with the Hermes context."""
     for name, schema, handler in _TOOLS:
-        ctx.register_tool(name, "gestor_cenas", schema, handler)
+        ctx.register_tool(name, "meal_manager", schema, handler)
 
     skill_path = Path(__file__).parent / "skill.md"
     ctx.inject_message(skill_path.read_text(encoding="utf-8"))

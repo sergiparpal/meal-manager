@@ -1,4 +1,4 @@
-"""gestor_cenas.src -- domain modules package."""
+"""meal_manager.src -- domain modules package."""
 
 import json
 import os
