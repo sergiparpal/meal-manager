@@ -1,4 +1,4 @@
-# Gestor de Cenas Mejorado
+# Meal Manager
 
 An intelligent meal planning and fridge inventory management system structured as an official Hermes plugin. It helps users decide what to cook for dinner and what to buy at the grocery store by analyzing their current fridge contents, recipe catalog, and cooking history.
 
@@ -42,8 +42,8 @@ An AI assistant invokes the nineteen tool handlers registered via `__init__.py:r
 1. **Clone the repository:**
 
    ```bash
-   git clone https://github.com/sergiparpal/gestor-cenas-mejorado.git
-   cd gestor-cenas-mejorado
+   git clone https://github.com/sergiparpal/meal-manager.git
+   cd meal-manager
    ```
 
 2. **Verify your Python version:**
@@ -127,7 +127,7 @@ This script seeds its own test data, exercises all nineteen tools end-to-end, an
 ## Project Structure
 
 ```
-gestor-cenas-mejorado/
+meal-manager/
 ├── plugin.yaml            # Hermes plugin manifest (name + provided tools)
 ├── __init__.py            # Plugin entry point — register(ctx) wires tools + skill
 ├── schemas.py             # JSON schemas for all nineteen tools (named constants)
@@ -139,14 +139,14 @@ gestor-cenas-mejorado/
 │   ├── dish.py            # Dish dataclass — recipe model (essential/optional ingredients)
 │   ├── suggestion.py      # Scoring engine — ranks dishes by availability + recency
 │   ├── shopping.py        # Shopping suggestions — single-ingredient unlock logic
-│   ├── history.py         # Cooking history persistence (data/historial.json)
-│   ├── storage.py         # Recipe catalog persistence (data/platos.json)
-│   ├── fridge.py          # Fridge inventory persistence (data/nevera.json)
+│   ├── history.py         # Cooking history persistence (data/history.json)
+│   ├── storage.py         # Recipe catalog persistence (data/dishes.json)
+│   ├── fridge.py          # Fridge inventory persistence (data/fridge.json)
 │   └── dii.py             # Dynamic Ingredient Interface — stateful session engine
 ├── data/
-│   ├── platos.json        # Recipe catalog (dishes with ingredients)
-│   ├── nevera.json        # Current fridge inventory (list of ingredients)
-│   ├── historial.json     # Cooking history (dish name → last-cooked ISO date)
+│   ├── dishes.json        # Recipe catalog (dishes with ingredients)
+│   ├── fridge.json        # Current fridge inventory (list of ingredients)
+│   ├── history.json       # Cooking history (dish name → last-cooked ISO date)
 │   └── sessions/          # (created lazily) DII session backups for crash recovery
 ├── test_hermes.py         # Integration smoke test
 └── README.md
@@ -154,15 +154,15 @@ gestor-cenas-mejorado/
 
 ### Data Format Reference
 
-**`data/platos.json`** — Recipe catalog:
+**`data/dishes.json`** — Recipe catalog:
 
 ```json
 {
-  "platos": [
+  "dishes": [
     {
-      "nombre": "Arroz con Pollo",
-      "tiempo_prep": 30,
-      "ingredientes": {
+      "name": "Arroz con Pollo",
+      "prep_time": 30,
+      "ingredients": {
         "arroz": true,
         "pollo": true,
         "pimientos": false
@@ -175,13 +175,13 @@ gestor-cenas-mejorado/
 - `true` = essential ingredient (must be in the fridge to cook the dish)
 - `false` = optional ingredient (improves the suggestion score but is not required)
 
-**`data/nevera.json`** — Fridge inventory:
+**`data/fridge.json`** — Fridge inventory:
 
 ```json
 ["patatas", "huevos", "arroz"]
 ```
 
-**`data/historial.json`** — Cooking history:
+**`data/history.json`** — Cooking history:
 
 ```json
 {"arroz con pollo": "2026-04-02"}
