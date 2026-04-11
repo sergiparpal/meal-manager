@@ -42,7 +42,7 @@ An AI assistant invokes the eighteen tool handlers registered via `__init__.py:r
 1. **Clone the repository:**
 
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/sergiparpal/gestor-cenas-mejorado.git
    cd gestor-cenas-mejorado
    ```
 
