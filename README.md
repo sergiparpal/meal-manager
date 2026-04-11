@@ -141,7 +141,7 @@ gestor-cenas-mejorado/
 ├── skill.md               # Prompt instructions defining when/how to call each tool
 ├── CLAUDE.md              # Development guidelines for Claude Code
 ├── src/
-│   ├── __init__.py
+│   ├── __init__.py        # Package marker
 │   ├── dish.py            # Dish dataclass — recipe model (essential/optional ingredients)
 │   ├── suggestion.py      # Scoring engine — ranks dishes by availability + recency
 │   ├── shopping.py        # Shopping suggestions — single-ingredient unlock logic
