@@ -37,3 +37,8 @@ def save_fridge(ingredients: list[str]) -> None:
         ingredients: The full list of ingredient names to save.
     """
     atomic_write_json(FRIDGE_PATH, ingredients)
+
+
+def load_fridge_set() -> set[str]:
+    """Load the fridge inventory as a set for O(1) membership tests."""
+    return set(load_fridge())

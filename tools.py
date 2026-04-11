@@ -1,10 +1,11 @@
 """Tool handlers for the meal_manager plugin.
 
 Every handler follows the signature ``def handler(args: dict, **kwargs) -> str``
-and returns a ``json.dumps()`` string.
+and returns a ``json.dumps()`` string.  Nineteen handlers total.
 """
 
 import json
+import logging
 import uuid
 from datetime import date
 
@@ -13,7 +14,7 @@ from .src.history import load_history, register_cooked_dish, remove_history_entr
 from .src.dish import Dish
 from .src.suggestion import suggest_dishes
 from .src.shopping import suggest_quick_shopping
-from .src.fridge import load_fridge, save_fridge, fridge_lock
+from .src.fridge import load_fridge, save_fridge, fridge_lock, load_fridge_set
 from .src.dii import (
     create_session,
     add_suggested_ingredient as dii_add_suggested_impl,
@@ -25,10 +26,28 @@ from .src.dii import (
     get_session_state as dii_get_state_impl,
 )
 
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
-# Private helper
+# Input limits (safety net for LLM-generated arguments)
 # ---------------------------------------------------------------------------
+
+_MAX_NAME_LEN = 200
+_MAX_INGREDIENTS = 100
+_MAX_BATCH_SIZE = 50
+_MAX_FRIDGE_UPDATE = 200
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+
+def _err(msg: str) -> str:
+    """Build a consistent JSON error response."""
+    return json.dumps({"error": msg}, ensure_ascii=False)
+
 
 def _days_since_last_cook() -> dict[str, int]:
     """Build a mapping of dish name -> days since it was last cooked."""
@@ -47,11 +66,15 @@ def _days_since_last_cook() -> dict[str, int]:
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
+# Read-only handlers (get_meal_suggestions, get_quick_shopping_list) are
+# lock-free.  Consistent snapshots are guaranteed by atomic_write_json
+# using os.replace under the hood.
+
 
 def get_meal_suggestions(args: dict, **kwargs) -> str:
     try:
         dishes = load_dishes()
-        fridge = set(load_fridge())
+        fridge = load_fridge_set()
         days = _days_since_last_cook()
 
         ranking = suggest_dishes(dishes, fridge, days)
@@ -61,13 +84,14 @@ def get_meal_suggestions(args: dict, **kwargs) -> str:
         ]
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("get_meal_suggestions failed")
+        return _err(str(exc))
 
 
 def get_quick_shopping_list(args: dict, **kwargs) -> str:
     try:
         dishes = load_dishes()
-        fridge = set(load_fridge())
+        fridge = load_fridge_set()
         days = _days_since_last_cook()
 
         shopping = suggest_quick_shopping(dishes, fridge, days)
@@ -81,7 +105,8 @@ def get_quick_shopping_list(args: dict, **kwargs) -> str:
         ]
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("get_quick_shopping_list failed")
+        return _err(str(exc))
 
 
 def update_fridge_inventory(args: dict, **kwargs) -> str:
@@ -91,6 +116,9 @@ def update_fridge_inventory(args: dict, **kwargs) -> str:
 
         if action not in ("add", "remove"):
             raise ValueError(f"action must be 'add' or 'remove', got '{action}'")
+
+        if len(ingredients) > _MAX_FRIDGE_UPDATE:
+            raise ValueError(f"Too many ingredients (max {_MAX_FRIDGE_UPDATE})")
 
         ingredients = list(dict.fromkeys(
             ing for raw in ingredients
@@ -113,27 +141,26 @@ def update_fridge_inventory(args: dict, **kwargs) -> str:
                     msg = f"No changes — {names} already in the fridge."
                 else:
                     msg = f"Successfully added {', '.join(added)} to the fridge."
-                return json.dumps(msg, ensure_ascii=False)
+            else:
+                to_remove = set(ingredients)
+                removed = [ing for ing in ingredients if ing in fridge]
+                fridge = [ing for ing in fridge if ing not in to_remove]
+                save_fridge(fridge)
+                if not removed:
+                    msg = f"No changes — {names} not found in the fridge."
+                else:
+                    msg = f"Successfully removed {', '.join(removed)} from the fridge."
 
-            # action == "remove"
-            to_remove = set(ingredients)
-            removed = [ing for ing in ingredients if ing in fridge]
-            fridge = [ing for ing in fridge if ing not in to_remove]
-            save_fridge(fridge)
-
-        if not removed:
-            msg = f"No changes — {names} not found in the fridge."
-        else:
-            msg = f"Successfully removed {', '.join(removed)} from the fridge."
         return json.dumps(msg, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("update_fridge_inventory failed")
+        return _err(str(exc))
 
 
 def register_cooked_meal(args: dict, **kwargs) -> str:
     try:
         dish_name = args["dish_name"]
-        name = dish_name.strip().lower()
+        name = Dish.normalize_name(dish_name)
 
         # Snapshot the catalog under lock so validation and ingredient
         # lookup see a consistent state.
@@ -160,20 +187,22 @@ def register_cooked_meal(args: dict, **kwargs) -> str:
         msg = f"Registered '{dish_name}' as cooked on {today.isoformat()}.{removed_msg}"
         return json.dumps(msg, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("register_cooked_meal failed")
+        return _err(str(exc))
 
 
 def delete_history_entry(args: dict, **kwargs) -> str:
     try:
         dish_name = args["dish_name"]
-        name = dish_name.strip().lower()
+        name = Dish.normalize_name(dish_name)
         if remove_history_entry(name):
             msg = f"Removed '{name}' from cooking history."
         else:
             msg = f"Error: '{dish_name}' not found in cooking history."
         return json.dumps(msg, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("delete_history_entry failed")
+        return _err(str(exc))
 
 
 def list_fridge(args: dict, **kwargs) -> str:
@@ -181,7 +210,8 @@ def list_fridge(args: dict, **kwargs) -> str:
         result = load_fridge()
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("list_fridge failed")
+        return _err(str(exc))
 
 
 def _normalize_ingredients(ingredients) -> dict:
@@ -194,24 +224,30 @@ def _normalize_ingredients(ingredients) -> dict:
         except json.JSONDecodeError:
             raise ValueError(f"Cannot parse ingredients string: {ingredients!r}")
     if isinstance(ingredients, list):
-        return {ing.strip().lower(): True for ing in ingredients if isinstance(ing, str) and ing.strip()}
-    if isinstance(ingredients, dict):
-        return {k.strip().lower(): v for k, v in ingredients.items()}
-    raise ValueError(f"ingredients must be a dict or list, got {type(ingredients).__name__}")
+        result = {ing.strip().lower(): True for ing in ingredients if isinstance(ing, str) and ing.strip()}
+    elif isinstance(ingredients, dict):
+        result = {k.strip().lower(): v for k, v in ingredients.items()}
+    else:
+        raise ValueError(f"ingredients must be a dict or list, got {type(ingredients).__name__}")
+    if len(result) > _MAX_INGREDIENTS:
+        raise ValueError(f"Too many ingredients (max {_MAX_INGREDIENTS})")
+    return result
 
 
 def add_dish(args: dict, **kwargs) -> str:
     try:
         name = args["name"]
+        if len(name) > _MAX_NAME_LEN:
+            raise ValueError(f"Dish name too long (max {_MAX_NAME_LEN} chars)")
         ingredients = _normalize_ingredients(args["ingredients"])
-        normalized = name.strip().lower()
+        normalized = Dish.normalize_name(name)
 
         with dishes_lock:
             dishes = load_dishes()
             if any(p.name.strip().lower() == normalized for p in dishes):
                 return json.dumps(f"Error: a dish called '{normalized}' already exists in the catalog.", ensure_ascii=False)
 
-            new_dish = Dish(name=normalized, prep_time=0)
+            new_dish = Dish(name=normalized)
             for ing, essential in ingredients.items():
                 new_dish.add_ingredient(ing, essential)
             dishes.append(new_dish)
@@ -222,13 +258,14 @@ def add_dish(args: dict, **kwargs) -> str:
         msg = f"Added '{normalized}' to the catalog ({n_ess} essential, {n_opt} optional ingredients)."
         return json.dumps(msg, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("add_dish failed")
+        return _err(str(exc))
 
 
 def delete_dish(args: dict, **kwargs) -> str:
     try:
         dish_name = args["dish_name"]
-        name = dish_name.strip().lower()
+        name = Dish.normalize_name(dish_name)
 
         with dishes_lock:
             dishes = load_dishes()
@@ -237,17 +274,21 @@ def delete_dish(args: dict, **kwargs) -> str:
                 return json.dumps(f"Error: '{dish_name}' not found in the catalog.", ensure_ascii=False)
             save_dishes(remaining)
 
+        # Clean up orphaned history entry for the deleted dish.
+        remove_history_entry(name)
+
         msg = f"Deleted '{name}' from the catalog."
         return json.dumps(msg, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("delete_dish failed")
+        return _err(str(exc))
 
 
 def edit_dish(args: dict, **kwargs) -> str:
     try:
         dish_name = args["dish_name"]
-        ingredients = args["ingredients"]
-        name = dish_name.strip().lower()
+        ingredients = _normalize_ingredients(args["ingredients"])
+        name = Dish.normalize_name(dish_name)
 
         with dishes_lock:
             dishes = load_dishes()
@@ -255,9 +296,7 @@ def edit_dish(args: dict, **kwargs) -> str:
             if dish is None:
                 return json.dumps(f"Error: '{dish_name}' not found in the catalog.", ensure_ascii=False)
 
-            dish.ingredients = {
-                Dish.normalize_ingredient(k): v for k, v in ingredients.items()
-            }
+            dish.ingredients = ingredients
             save_dishes(dishes)
 
         n_ess = sum(1 for v in dish.ingredients.values() if v)
@@ -265,12 +304,15 @@ def edit_dish(args: dict, **kwargs) -> str:
         msg = f"Updated '{name}' ingredients ({n_ess} essential, {n_opt} optional)."
         return json.dumps(msg, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("edit_dish failed")
+        return _err(str(exc))
 
 
 def add_dishes_batch(args: dict, **kwargs) -> str:
     try:
         dishes_input = args["dishes"]
+        if len(dishes_input) > _MAX_BATCH_SIZE:
+            raise ValueError(f"Too many dishes in batch (max {_MAX_BATCH_SIZE})")
 
         with dishes_lock:
             dishes = load_dishes()
@@ -279,12 +321,12 @@ def add_dishes_batch(args: dict, **kwargs) -> str:
             added = []
             skipped = []
             for entry in dishes_input:
-                name = entry["name"].strip().lower()
+                name = Dish.normalize_name(entry["name"])
                 if name in existing:
                     skipped.append(name)
                     continue
                 ingredients = _normalize_ingredients(entry["ingredients"])
-                new_dish = Dish(name=name, prep_time=0)
+                new_dish = Dish(name=name)
                 for ing, essential in ingredients.items():
                     new_dish.add_ingredient(ing, essential)
                 dishes.append(new_dish)
@@ -297,7 +339,8 @@ def add_dishes_batch(args: dict, **kwargs) -> str:
         result = {"added": added, "skipped": skipped}
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("add_dishes_batch failed")
+        return _err(str(exc))
 
 
 def clear_fridge(args: dict, **kwargs) -> str:
@@ -313,7 +356,8 @@ def clear_fridge(args: dict, **kwargs) -> str:
             msg = f"Cleared the fridge ({count} ingredient{'s' if count != 1 else ''} removed)."
         return json.dumps(msg, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("clear_fridge failed")
+        return _err(str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +367,10 @@ def clear_fridge(args: dict, **kwargs) -> str:
 
 def init_ingredient_session(args: dict, **kwargs) -> str:
     try:
+        dish_name = args["dish_name"]
+        if len(dish_name) > _MAX_NAME_LEN:
+            raise ValueError(f"Dish name too long (max {_MAX_NAME_LEN} chars)")
+
         ingredients = args["ingredients"]
         is_essential = args["is_essential"]
 
@@ -340,7 +388,17 @@ def init_ingredient_session(args: dict, **kwargs) -> str:
 
         # Ensure they are lists
         if not isinstance(ingredients, list) or not isinstance(is_essential, list):
-            return json.dumps({"error": "ingredients and is_essential must be arrays"}, ensure_ascii=False)
+            return _err("ingredients and is_essential must be arrays")
+
+        # Validate parallel arrays have the same length
+        if len(ingredients) != len(is_essential):
+            return _err(
+                f"ingredients ({len(ingredients)}) and is_essential "
+                f"({len(is_essential)}) must have the same length"
+            )
+
+        if len(ingredients) > _MAX_INGREDIENTS:
+            return _err(f"Too many ingredients (max {_MAX_INGREDIENTS})")
 
         # Convert flat parallel arrays to internal format
         ranked = [
@@ -357,13 +415,14 @@ def init_ingredient_session(args: dict, **kwargs) -> str:
 
         session = create_session(
             session_id=uuid.uuid4().hex[:16],
-            dish_name=args["dish_name"],
+            dish_name=dish_name,
             ranked_ingredients=ranked,
             pre_select_top_n=pre_select,
         )
         return json.dumps(dii_get_state_impl(session.session_id), ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("init_ingredient_session failed")
+        return _err(str(exc))
 
 
 def dii_add_suggested(args: dict, **kwargs) -> str:
@@ -371,7 +430,8 @@ def dii_add_suggested(args: dict, **kwargs) -> str:
         result = dii_add_suggested_impl(args["session_id"])
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("dii_add_suggested failed")
+        return _err(str(exc))
 
 
 def dii_skip_suggested(args: dict, **kwargs) -> str:
@@ -379,7 +439,8 @@ def dii_skip_suggested(args: dict, **kwargs) -> str:
         result = dii_skip_suggested_impl(args["session_id"])
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("dii_skip_suggested failed")
+        return _err(str(exc))
 
 
 def dii_remove_ingredient(args: dict, **kwargs) -> str:
@@ -387,14 +448,15 @@ def dii_remove_ingredient(args: dict, **kwargs) -> str:
         result = dii_remove_ingredient_impl(args["session_id"], args["ingredient"])
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("dii_remove_ingredient failed")
+        return _err(str(exc))
 
 
 def dii_add_manual(args: dict, **kwargs) -> str:
     try:
         ingredient = args["ingredient"].strip()
         if not ingredient:
-            return json.dumps({"error": "Ingredient name cannot be empty"}, ensure_ascii=False)
+            return _err("Ingredient name cannot be empty")
         result = dii_add_manual_impl(
             args["session_id"],
             ingredient,
@@ -402,7 +464,8 @@ def dii_add_manual(args: dict, **kwargs) -> str:
         )
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("dii_add_manual failed")
+        return _err(str(exc))
 
 
 def dii_clear_all(args: dict, **kwargs) -> str:
@@ -410,7 +473,8 @@ def dii_clear_all(args: dict, **kwargs) -> str:
         result = dii_clear_all_impl(args["session_id"])
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("dii_clear_all failed")
+        return _err(str(exc))
 
 
 def finalize_ingredient_session(args: dict, **kwargs) -> str:
@@ -422,7 +486,8 @@ def finalize_ingredient_session(args: dict, **kwargs) -> str:
         )
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("finalize_ingredient_session failed")
+        return _err(str(exc))
 
 
 def dii_get_state(args: dict, **kwargs) -> str:
@@ -431,4 +496,5 @@ def dii_get_state(args: dict, **kwargs) -> str:
         result = dii_get_state_impl(args["session_id"])
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        logger.exception("dii_get_state failed")
+        return _err(str(exc))

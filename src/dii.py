@@ -105,12 +105,13 @@ def _cleanup_expired(ttl_minutes: int = _SESSION_TTL_MINUTES) -> None:
     """
     global _last_cleanup
     now = datetime.now()
-    if _last_cleanup is not None and (now - _last_cleanup).total_seconds() < _CLEANUP_INTERVAL_SECONDS:
-        return
-    _last_cleanup = now
-
     cutoff = now - timedelta(minutes=ttl_minutes)
+
     with _global_lock:
+        if _last_cleanup is not None and (now - _last_cleanup).total_seconds() < _CLEANUP_INTERVAL_SECONDS:
+            return
+        _last_cleanup = now
+
         expired = [
             sid for sid, s in _sessions.items()
             if datetime.fromisoformat(s.last_activity) < cutoff
@@ -118,6 +119,12 @@ def _cleanup_expired(ttl_minutes: int = _SESSION_TTL_MINUTES) -> None:
         for sid in expired:
             del _sessions[sid]
             _session_locks.pop(sid, None)
+
+        # Clean orphaned locks (e.g. from lookups on invalid session IDs)
+        orphaned = [sid for sid in _session_locks if sid not in _sessions]
+        for sid in orphaned:
+            del _session_locks[sid]
+
     for sid in expired:
         _delete_session_file(sid)
 
@@ -298,7 +305,7 @@ def create_session(
     now = _now_iso()
     session = DIISession(
         session_id=session_id,
-        dish_name=Dish.normalize_ingredient(dish_name),
+        dish_name=Dish.normalize_name(dish_name),
         created_at=now,
         last_activity=now,
     )
@@ -506,7 +513,7 @@ def finalize_session(
                 if existing is not None:
                     existing.ingredients = ingredient_map
                 else:
-                    new_dish = Dish(name=session.dish_name, prep_time=0)
+                    new_dish = Dish(name=session.dish_name)
                     for ing, essential in ingredient_map.items():
                         new_dish.add_ingredient(ing, essential)
                     dishes.append(new_dish)

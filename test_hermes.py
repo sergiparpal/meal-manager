@@ -1,4 +1,4 @@
-"""Integration smoke test for all 18 meal_manager tools.
+"""Integration smoke test for all 19 meal_manager tools.
 
 Backs up data files before running and restores them afterwards so the test
 is idempotent and never pollutes live data.
@@ -72,12 +72,10 @@ def _seed():
         "dishes": [
             {
                 "name": "Arroz con Pollo",
-                "prep_time": 30,
                 "ingredients": {"arroz": True, "pollo": True, "pimientos": False},
             },
             {
                 "name": "Tortilla de patatas",
-                "prep_time": 25,
                 "ingredients": {"huevos": True, "patatas": True, "cebolla": False},
             },
         ]
