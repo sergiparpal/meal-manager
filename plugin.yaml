@@ -1,0 +1,22 @@
+name: gestor_cenas
+description: Meal planning and fridge inventory manager for Hermes agents.
+
+provides_tools:
+  - get_meal_suggestions
+  - get_quick_shopping_list
+  - update_fridge_inventory
+  - register_cooked_meal
+  - delete_history_entry
+  - list_fridge
+  - add_dish
+  - add_dishes_batch
+  - delete_dish
+  - edit_dish
+  - clear_fridge
+  - init_ingredient_session
+  - dii_add_suggested
+  - dii_skip_suggested
+  - dii_remove_ingredient
+  - dii_add_manual
+  - dii_clear_all
+  - finalize_ingredient_session
