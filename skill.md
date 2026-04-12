@@ -212,8 +212,8 @@ If `recalculation_needed` is `true` (happens when removing an essential ingredie
 ```json
 {
   "session_id": "the-same-id-as-before",
-  "dish_name": "tortilla de patatas",
-  "ingredients": ["huevos", "cebolla", "aceite"],
+  "dish_name": "potato omelette",
+  "ingredients": ["eggs", "onion", "oil"],
   "is_essential": [true, false, false]
 }
 ```
