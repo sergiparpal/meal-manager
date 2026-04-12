@@ -139,7 +139,7 @@ Interactive system for building a dish's ingredient list step by step through pl
 ### When to use DII vs `add_dish`
 
 - Use `add_dish` or `add_dishes_batch` when the user gives a clear list of ingredients and doesn't need to explore options.
-- Use DII when the user wants you to guide them step by step, exploring possible ingredients for a dish.
+- When adding a dish, if the user provides the ingredients, use `add_dish`. If they don't, always use DII — don't ask them to list ingredients manually.
 
 ### DII tools
 
