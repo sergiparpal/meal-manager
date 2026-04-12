@@ -135,7 +135,7 @@ meal-manager/
 ├── __init__.py            # Plugin entry point — register(ctx) wires tools + skill
 ├── schemas.py             # JSON schemas for all nineteen tools (named constants)
 ├── tools.py               # Handler functions (args dict → JSON string)
-├── test_unit.py           # Unit tests for pure domain logic
+├── test_unit.py           # Unit tests for domain logic modules
 ├── skill.md               # Prompt instructions defining when/how to call each tool
 ├── AGENTS.md              # Repository guidance for agentic coding work
 ├── CLAUDE.md              # Development guidelines for Claude Code
@@ -166,11 +166,11 @@ meal-manager/
 {
   "dishes": [
     {
-      "name": "arroz con pollo",
+      "name": "rice with chicken",
       "ingredients": {
-        "arroz": true,
-        "pollo": true,
-        "pimientos": false
+        "rice": true,
+        "chicken": true,
+        "peppers": false
       }
     }
   ]
@@ -184,13 +184,13 @@ meal-manager/
 **`data/fridge.json`** — Fridge inventory:
 
 ```json
-["patatas", "huevos", "arroz"]
+["potatoes", "eggs", "rice"]
 ```
 
 **`data/history.json`** — Cooking history:
 
 ```json
-{"arroz con pollo": "2026-04-02"}
+{"rice with chicken": "2026-04-02"}
 ```
 
 ---
