@@ -9,12 +9,23 @@ import logging
 import uuid
 from datetime import date
 
-from .src.storage import load_dishes, save_dishes, dishes_lock
-from .src.history import load_history, set_history_entry, remove_history_entry
+from .src.storage import load_dishes, save_dishes, dishes_lock, restore_dish
+from .src.history import (
+    load_history,
+    set_history_entry,
+    remove_history_entry,
+    revert_history_entry,
+)
 from .src.dish import Dish
 from .src.suggestion import suggest_dishes
 from .src.shopping import suggest_quick_shopping
-from .src.fridge import load_fridge, save_fridge, fridge_lock, load_fridge_set
+from .src.fridge import (
+    load_fridge,
+    save_fridge,
+    fridge_lock,
+    load_fridge_set,
+    remove_items_from_fridge,
+)
 from .src.dii import (
     create_session,
     add_suggested_ingredient as dii_add_suggested_impl,
@@ -27,6 +38,7 @@ from .src.dii import (
 )
 
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +74,8 @@ def _normalize_ingredient_name(name: str) -> str:
     normalized = Dish.normalize_ingredient(name)
     if not normalized:
         raise ValueError("Ingredient name cannot be empty")
+    if len(normalized) > _MAX_NAME_LEN:
+        raise ValueError(f"Ingredient name too long (max {_MAX_NAME_LEN} chars)")
     return normalized
 
 
@@ -154,21 +168,35 @@ def update_fridge_inventory(args: dict, **kwargs) -> str:
 
             if action == "add":
                 added = [ing for ing in ingredients if ing not in fridge]
-                fridge.extend(added)
-                save_fridge(fridge)
-                if not added:
-                    msg = f"No changes — {names} already in the fridge."
+                already = [ing for ing in ingredients if ing in fridge]
+                if added:
+                    fridge.extend(added)
+                    save_fridge(fridge)
+                    if already:
+                        msg = (
+                            f"Added {', '.join(added)} to the fridge. "
+                            f"Already present: {', '.join(already)}."
+                        )
+                    else:
+                        msg = f"Successfully added {', '.join(added)} to the fridge."
                 else:
-                    msg = f"Successfully added {', '.join(added)} to the fridge."
+                    msg = f"No changes — {names} already in the fridge."
             else:
                 to_remove = set(ingredients)
                 removed = [ing for ing in ingredients if ing in fridge]
-                fridge = [ing for ing in fridge if ing not in to_remove]
-                save_fridge(fridge)
-                if not removed:
-                    msg = f"No changes — {names} not found in the fridge."
+                not_found = [ing for ing in ingredients if ing not in fridge]
+                if removed:
+                    fridge = [ing for ing in fridge if ing not in to_remove]
+                    save_fridge(fridge)
+                    if not_found:
+                        msg = (
+                            f"Removed {', '.join(removed)} from the fridge. "
+                            f"Not found: {', '.join(not_found)}."
+                        )
+                    else:
+                        msg = f"Successfully removed {', '.join(removed)} from the fridge."
                 else:
-                    msg = f"Successfully removed {', '.join(removed)} from the fridge."
+                    msg = f"No changes — {names} not found in the fridge."
 
         return json.dumps(msg, ensure_ascii=False)
     except Exception as exc:
@@ -191,7 +219,8 @@ def register_cooked_meal(args: dict, **kwargs) -> str:
             return json.dumps(f"Error: '{dish_name}' is not in the recipe catalog.", ensure_ascii=False)
 
         today = date.today()
-        previous_history = set_history_entry(name, today.isoformat())
+        today_iso = today.isoformat()
+        previous_history = set_history_entry(name, today_iso)
 
         essentials = [ing for ing, imp in dish.ingredients.items() if imp]
 
@@ -203,17 +232,16 @@ def register_cooked_meal(args: dict, **kwargs) -> str:
                     fridge = [ing for ing in fridge if ing not in removed]
                     save_fridge(fridge)
         except Exception:
+            # Delta rollback: only revert if our history write is still
+            # current; never overwrite a concurrent writer's value.
             try:
-                if previous_history is None:
-                    remove_history_entry(name)
-                else:
-                    set_history_entry(name, previous_history)
+                revert_history_entry(name, today_iso, previous_history)
             except Exception:
                 logger.exception("register_cooked_meal rollback failed")
             raise
 
         removed_msg = f" Removed from fridge: {', '.join(removed)}." if removed else ""
-        msg = f"Registered '{dish_name}' as cooked on {today.isoformat()}.{removed_msg}"
+        msg = f"Registered '{dish.name}' as cooked on {today_iso}.{removed_msg}"
         return json.dumps(msg, ensure_ascii=False)
     except Exception as exc:
         logger.exception("register_cooked_meal failed")
@@ -302,18 +330,20 @@ def delete_dish(args: dict, **kwargs) -> str:
 
         with dishes_lock:
             dishes = load_dishes()
-            remaining = [p for p in dishes if p.name.strip().lower() != name]
-            if len(remaining) == len(dishes):
+            deleted = next((p for p in dishes if p.name.strip().lower() == name), None)
+            if deleted is None:
                 return json.dumps(f"Error: '{dish_name}' not found in the catalog.", ensure_ascii=False)
+            remaining = [p for p in dishes if p.name.strip().lower() != name]
             save_dishes(remaining)
 
         # Clean up orphaned history entry for the deleted dish.
         try:
             remove_history_entry(name)
         except Exception:
+            # Delta rollback: re-add only if no concurrent writer has put a
+            # same-named dish back.
             try:
-                with dishes_lock:
-                    save_dishes(dishes)
+                restore_dish(deleted)
             except Exception:
                 logger.exception("delete_dish rollback failed")
             raise
@@ -465,11 +495,24 @@ def init_ingredient_session(args: dict, **kwargs) -> str:
         if pre_select < 0:
             return _err("pre_select_top_n must be >= 0")
 
+        # Recalculation path: caller passes the existing session_id to reset
+        # it in place. Otherwise generate a fresh id.
+        provided_id = args.get("session_id")
+        if provided_id is not None:
+            if not isinstance(provided_id, str) or not provided_id.strip():
+                return _err("session_id must be a non-empty string when provided")
+            session_id = provided_id.strip()
+            reuse = True
+        else:
+            session_id = uuid.uuid4().hex[:16]
+            reuse = False
+
         session = create_session(
-            session_id=uuid.uuid4().hex[:16],
+            session_id=session_id,
             dish_name=dish_name,
             ranked_ingredients=ranked,
             pre_select_top_n=pre_select,
+            reuse_existing=reuse,
         )
         return json.dumps(dii_get_state_impl(session.session_id), ensure_ascii=False)
     except Exception as exc:

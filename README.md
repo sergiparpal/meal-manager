@@ -10,8 +10,8 @@ An AI assistant invokes the nineteen tool handlers registered via `__init__.py:r
 
 - **Smart Meal Suggestions** — Ranks every dish in the catalog using a weighted scoring algorithm that combines ingredient availability (60%) with cooking recency (40%). Dishes cooked fewer than 2 days ago are automatically excluded.
 - **One-Ingredient Shopping List** — Identifies single ingredients that, once purchased, unlock entirely new dishes. Prioritized by the projected score of the unlocked meal.
-- **Fridge Inventory Management** — Add or remove ingredients as you shop or cook. All names are normalized to lowercase for consistent matching.
-- **Cooking History Tracking** — Logs cooked meals with ISO dates so the suggestion engine avoids repetitive recommendations.
+- **Fridge Inventory Management** — Add or remove ingredients as you shop or cook. Ingredient and dish names are normalized to lowercase for consistent matching.
+- **Cooking History Tracking** — Logs cooked meals with ISO dates. History keys are normalized to lowercase on load, so comparisons are case-insensitive.
 - **Auto-Cleanup on Cook** — When a meal is registered as cooked, its essential ingredients are automatically removed from the fridge inventory.
 - **Essential vs. Optional Ingredients** — Recipes distinguish between must-have ingredients (required to cook) and nice-to-have ingredients (boost the suggestion score but are not blocking).
 - **Dynamic Ingredient Interface (DII)** — Interactive, stateful ingredient selection via plain text conversation. A "probability funnel" reveals ranked ingredient suggestions one at a time. The agent interprets free-text user responses (e.g. "sí", "pasa", "añade X") to drive add/skip/remove/manual-add controls. Removing an essential ingredient triggers a recalculation signal so the agent can re-evaluate suggestions.
@@ -52,9 +52,10 @@ An AI assistant invokes the nineteen tool handlers registered via `__init__.py:r
    python3 --version   # Should be 3.12+
    ```
 
-3. **Run the integration test** to verify everything works:
+3. **Run the tests** to verify everything works:
 
    ```bash
+   python3 test_unit.py
    python3 test_hermes.py
    ```
 
@@ -122,6 +123,8 @@ python3 test_hermes.py
 
 This script seeds its own test data, exercises all nineteen tools end-to-end, and restores the original data files afterwards.
 
+For the fastest feedback on pure domain logic, run `python3 test_unit.py`. It covers the dataclass, scoring, shopping, and ingredient-normalization helpers without touching `data/`.
+
 ---
 
 ## Project Structure
@@ -132,7 +135,9 @@ meal-manager/
 ├── __init__.py            # Plugin entry point — register(ctx) wires tools + skill
 ├── schemas.py             # JSON schemas for all nineteen tools (named constants)
 ├── tools.py               # Handler functions (args dict → JSON string)
+├── test_unit.py           # Unit tests for pure domain logic
 ├── skill.md               # Prompt instructions defining when/how to call each tool
+├── AGENTS.md              # Repository guidance for agentic coding work
 ├── CLAUDE.md              # Development guidelines for Claude Code
 ├── src/
 │   ├── __init__.py        # Package marker
@@ -149,6 +154,7 @@ meal-manager/
 │   ├── history.json       # Cooking history (dish name → last-cooked ISO date)
 │   └── sessions/          # (created lazily) DII session backups for crash recovery
 ├── test_hermes.py         # Integration smoke test
+├── LICENSE                # GPLv3 license text
 └── README.md
 ```
 
@@ -160,8 +166,7 @@ meal-manager/
 {
   "dishes": [
     {
-      "name": "Arroz con Pollo",
-      "prep_time": 30,
+      "name": "arroz con pollo",
       "ingredients": {
         "arroz": true,
         "pollo": true,
@@ -174,6 +179,7 @@ meal-manager/
 
 - `true` = essential ingredient (must be in the fridge to cook the dish)
 - `false` = optional ingredient (improves the suggestion score but is not required)
+- Legacy `prep_time` fields are ignored on load and are not written back.
 
 **`data/fridge.json`** — Fridge inventory:
 
@@ -195,10 +201,10 @@ Contributions are welcome. To get started:
 
 1. Fork the repository.
 2. Create a feature branch (`git checkout -b feature/my-feature`).
-3. Make your changes and verify them with `python3 test_hermes.py`.
+3. Make your changes and verify them with `python3 test_unit.py` and `python3 test_hermes.py`.
 4. Commit your changes and open a Pull Request.
 
-Please ensure all ingredient names follow the lowercase/stripped normalization convention used throughout the codebase.
+Please ensure all ingredient and dish names follow the lowercase/stripped normalization convention used throughout the codebase.
 
 ---
 

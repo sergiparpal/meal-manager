@@ -8,17 +8,19 @@ live in memory with optional JSON backup for crash recovery.
 import json
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
 from . import atomic_write_json
 from .dish import Dish
-from .fridge import load_fridge, save_fridge, fridge_lock
+from .fridge import load_fridge, save_fridge, fridge_lock, remove_items_from_fridge
 from .storage import load_dishes, save_dishes, dishes_lock
 
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -28,6 +30,27 @@ _SESSION_TTL_MINUTES = 30
 _CLEANUP_INTERVAL_SECONDS = 60
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _SESSION_DIR = _DATA_DIR / "sessions"
+# Sentinel used when last_activity is missing or malformed — guaranteed to
+# be older than any real TTL window.
+_EPOCH_SENTINEL_ISO = "1970-01-01T00:00:00+00:00"
+
+
+def _parse_iso_to_aware(value: str | None) -> datetime:
+    """Parse an ISO timestamp into a UTC-aware datetime.
+
+    Falls back to the epoch sentinel for empty/invalid input so the cleanup
+    loop can never crash on a malformed last_activity field. Naive timestamps
+    written by older code paths are assumed UTC.
+    """
+    if not value:
+        return datetime.fromisoformat(_EPOCH_SENTINEL_ISO)
+    try:
+        dt = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return datetime.fromisoformat(_EPOCH_SENTINEL_ISO)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 # ---------------------------------------------------------------------------
 # Session dataclass
@@ -42,8 +65,8 @@ class DIISession:
     optional_ingredients: list[str] = field(default_factory=list)
     hidden_queue: list[dict] = field(default_factory=list)
     current_suggestion: dict | None = None
-    created_at: str = ""
-    last_activity: str = ""
+    created_at: str = _EPOCH_SENTINEL_ISO
+    last_activity: str = _EPOCH_SENTINEL_ISO
     finalized: bool = False
     pending_recalculation: bool = False
 
@@ -55,7 +78,7 @@ class DIISession:
 _sessions: dict[str, DIISession] = {}
 _session_locks: dict[str, threading.Lock] = {}
 _global_lock = threading.Lock()  # protects _sessions and _session_locks dicts
-_last_cleanup: datetime | None = None
+_last_cleanup_monotonic: float = 0.0
 
 # ---------------------------------------------------------------------------
 # Lock helpers
@@ -76,7 +99,7 @@ def _get_lock(session_id: str) -> threading.Lock:
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _persist_session(session: DIISession) -> None:
@@ -86,15 +109,31 @@ def _persist_session(session: DIISession) -> None:
 
 
 def _load_session_from_disk(session_id: str) -> DIISession | None:
-    """Attempt to restore a session from its JSON backup."""
+    """Attempt to restore a session from its JSON backup.
+
+    Rejects (and removes) sessions whose ``last_activity`` is older than the
+    TTL window — otherwise a stale file would resurrect a session that the
+    in-memory cleanup already purged.
+    """
     path = _SESSION_DIR / f"{session_id}.json"
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return _dict_to_session(data)
     except Exception:
+        path.unlink(missing_ok=True)
         return None
+    try:
+        session = _dict_to_session(data)
+    except Exception:
+        path.unlink(missing_ok=True)
+        return None
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=_SESSION_TTL_MINUTES)
+    if _parse_iso_to_aware(session.last_activity) < cutoff:
+        path.unlink(missing_ok=True)
+        return None
+    return session
 
 
 def _delete_session_file(session_id: str) -> None:
@@ -105,32 +144,31 @@ def _delete_session_file(session_id: str) -> None:
 def _cleanup_expired(ttl_minutes: int = _SESSION_TTL_MINUTES) -> None:
     """Purge sessions older than TTL from memory and disk.
 
-    Debounced: runs at most once per _CLEANUP_INTERVAL_SECONDS.
+    Debounced via monotonic clock so wall-clock jumps cannot stop it firing.
     """
-    global _last_cleanup
-    now = datetime.now()
-    cutoff = now - timedelta(minutes=ttl_minutes)
+    global _last_cleanup_monotonic
+    now_mono = time.monotonic()
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=ttl_minutes)
 
     with _global_lock:
-        if _last_cleanup is not None and (now - _last_cleanup).total_seconds() < _CLEANUP_INTERVAL_SECONDS:
+        if _last_cleanup_monotonic and (now_mono - _last_cleanup_monotonic) < _CLEANUP_INTERVAL_SECONDS:
             return
-        _last_cleanup = now
+        _last_cleanup_monotonic = now_mono
 
         expired = [
             sid for sid, s in _sessions.items()
-            if datetime.fromisoformat(s.last_activity) < cutoff
+            if _parse_iso_to_aware(s.last_activity) < cutoff
         ]
         for sid in expired:
-            del _sessions[sid]
+            _sessions.pop(sid, None)
             _session_locks.pop(sid, None)
+            # Delete the file inside the lock so a concurrent get_session
+            # cannot resurrect a just-purged session from disk.
+            _delete_session_file(sid)
 
         # Clean orphaned locks (e.g. from lookups on invalid session IDs)
-        orphaned = [sid for sid in _session_locks if sid not in _sessions]
-        for sid in orphaned:
+        for sid in [s for s in _session_locks if s not in _sessions]:
             del _session_locks[sid]
-
-    for sid in expired:
-        _delete_session_file(sid)
 
     # Also clean orphaned files on disk (cap iterations to avoid slow scans)
     if _SESSION_DIR.exists():
@@ -139,7 +177,7 @@ def _cleanup_expired(ttl_minutes: int = _SESSION_TTL_MINUTES) -> None:
                 break
             try:
                 data = json.loads(fpath.read_text(encoding="utf-8"))
-                last = datetime.fromisoformat(data.get("last_activity", "2000-01-01"))
+                last = _parse_iso_to_aware(data.get("last_activity"))
                 if last < cutoff:
                     fpath.unlink(missing_ok=True)
             except Exception:
@@ -201,9 +239,10 @@ def _session_to_response(session: DIISession, *, recalculation_needed: bool = Fa
     elif awaiting_recalc:
         next_actions = ["init_ingredient_session", "dii_add_manual", "dii_remove_ingredient", "dii_clear_all", "finalize_ingredient_session"]
         instructions = (
-            f"The session needs recalculation. Call init_ingredient_session with a new "
-            f"ingredient list for '{session.dish_name}' (you can reuse the already selected ones). "
-            f"You can also add/remove ingredients manually or finalize."
+            f"The session needs recalculation. Call init_ingredient_session again "
+            f"with a new ranked list for '{session.dish_name}' AND pass this same "
+            f"session_id ('{session.session_id}') so the session is reset in place. "
+            f"You can also add/remove ingredients manually or finalize as-is."
         )
     elif has_suggestion:
         assert session.current_suggestion is not None
@@ -298,12 +337,18 @@ def create_session(
     dish_name: str,
     ranked_ingredients: list[dict],
     pre_select_top_n: int = 3,
+    *,
+    reuse_existing: bool = False,
 ) -> DIISession:
     """Initialize a DII session.
 
     The top *pre_select_top_n* ingredients are auto-selected into the
     essential/optional lists.  The next one becomes ``current_suggestion``
     and the rest go into ``hidden_queue``.
+
+    When *reuse_existing* is True, any existing session with this id is
+    replaced in place — used by the recalculation flow so the agent can keep
+    the same session_id after the LLM regenerates the ranked list.
     """
     _cleanup_expired()
 
@@ -370,11 +415,11 @@ def create_session(
             if name not in session.optional_ingredients:
                 session.optional_ingredients.append(name)
 
-    session.hidden_queue = remaining[1:] if len(remaining) > 1 else []
+    session.hidden_queue = remaining[1:]
     session.current_suggestion = remaining[0] if remaining else None
 
     with _global_lock:
-        if session_id in _sessions:
+        if session_id in _sessions and not reuse_existing:
             raise ValueError(f"Session ID collision: {session_id}")
         _sessions[session_id] = session
     _persist_session(session)
@@ -383,12 +428,17 @@ def create_session(
 
 def get_session_state(session_id: str) -> dict:
     """Return public session state as a JSON-serializable dict."""
-    session = _require_session(session_id)
-    return _session_to_response(session)
+    # Validate first so we don't create a per-session lock for a non-existent
+    # id (otherwise _session_locks accumulates orphan entries).
+    _require_session(session_id)
+    with _get_lock(session_id):
+        session = _require_session(session_id)
+        return _session_to_response(session)
 
 
 def add_suggested_ingredient(session_id: str) -> dict:
     """Accept the current suggestion, advance the queue."""
+    _require_active_session(session_id)
     with _get_lock(session_id):
         session = _require_active_session(session_id)
 
@@ -414,6 +464,7 @@ def add_suggested_ingredient(session_id: str) -> dict:
 
 def skip_suggested_ingredient(session_id: str) -> dict:
     """Skip the current suggestion without adding it."""
+    _require_active_session(session_id)
     with _get_lock(session_id):
         session = _require_active_session(session_id)
         _advance_queue(session)
@@ -424,6 +475,7 @@ def skip_suggested_ingredient(session_id: str) -> dict:
 
 def remove_ingredient(session_id: str, ingredient: str) -> dict:
     """Remove an ingredient. Signals recalculation if it was essential."""
+    _require_session(session_id)
     with _get_lock(session_id):
         session = _require_session(session_id)
         name = Dish.normalize_ingredient(ingredient)
@@ -449,6 +501,7 @@ def remove_ingredient(session_id: str, ingredient: str) -> dict:
 
 def add_manual_ingredient(session_id: str, ingredient: str, is_essential: bool = True) -> dict:
     """Add a user-typed ingredient not from the funnel."""
+    _require_session(session_id)
     with _get_lock(session_id):
         session = _require_session(session_id)
         if not isinstance(is_essential, bool):
@@ -488,6 +541,7 @@ def add_manual_ingredient(session_id: str, ingredient: str, is_essential: bool =
 
 def clear_all_ingredients(session_id: str) -> dict:
     """Remove all selected ingredients. Signals recalculation."""
+    _require_session(session_id)
     with _get_lock(session_id):
         session = _require_session(session_id)
         session.essential_ingredients.clear()
@@ -509,6 +563,8 @@ def finalize_session(
     if not isinstance(commit_to_dish, bool):
         raise ValueError("commit_to_dish must be a boolean")
 
+    if get_session(session_id) is None:
+        raise ValueError(f"Session not found or expired: {session_id}")
     with _get_lock(session_id):
         session = get_session(session_id)
         if session is None:
@@ -524,17 +580,16 @@ def finalize_session(
 
         committed_fridge = False
         committed_dish = False
-        fridge_snapshot: list[str] | None = None
+        added_to_fridge: list[str] = []
 
         if commit_to_fridge and all_ingredients:
             with fridge_lock:
                 fridge = load_fridge()
-                fridge_snapshot = list(fridge)
-                added = [ing for ing in all_ingredients if ing not in fridge]
-                if added:
-                    fridge.extend(added)
+                added_to_fridge = [ing for ing in all_ingredients if ing not in fridge]
+                if added_to_fridge:
+                    fridge.extend(added_to_fridge)
                     save_fridge(fridge)
-                committed_fridge = bool(added)
+                committed_fridge = bool(added_to_fridge)
 
         try:
             if commit_to_dish:
@@ -560,10 +615,11 @@ def finalize_session(
                     save_dishes(dishes)
                     committed_dish = True
         except Exception:
-            if committed_fridge and fridge_snapshot is not None:
+            # Delta rollback: only remove the items we actually added so we
+            # don't clobber concurrent fridge writes.
+            if added_to_fridge:
                 try:
-                    with fridge_lock:
-                        save_fridge(fridge_snapshot)
+                    remove_items_from_fridge(added_to_fridge)
                 except Exception:
                     logger.exception("finalize_session fridge rollback failed")
             raise

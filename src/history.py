@@ -31,10 +31,6 @@ def load_history():
     return normalized
 
 
-def register_cooked_dish(dish_name, date_str):
-    set_history_entry(dish_name, date_str)
-
-
 def set_history_entry(dish_name, date_str):
     """Store or replace a cooking-history entry and return the previous value."""
     with history_lock:
@@ -61,5 +57,25 @@ def remove_history_entry(dish_name: str) -> bool:
         if key not in history:
             return False
         del history[key]
+        atomic_write_json(HISTORY_PATH, history)
+        return True
+
+
+def revert_history_entry(dish_name: str, expected_value: str, previous_value: str | None) -> bool:
+    """Compare-and-swap rollback for set_history_entry.
+
+    If the current entry equals *expected_value*, restore *previous_value*
+    (or delete the key if previous was None). If the current value diverged
+    (a concurrent writer changed it), leave it alone and return False.
+    """
+    with history_lock:
+        history = load_history()
+        key = dish_name.strip().lower()
+        if history.get(key) != expected_value:
+            return False
+        if previous_value is None:
+            history.pop(key, None)
+        else:
+            history[key] = previous_value
         atomic_write_json(HISTORY_PATH, history)
         return True

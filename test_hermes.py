@@ -11,6 +11,7 @@ import importlib
 import json
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -29,38 +30,54 @@ _pkg = importlib.import_module(_PLUGIN_DIR.name)
 # ---------------------------------------------------------------------------
 
 _DATA_DIR = Path(__file__).resolve().parent / "data"
-_BACKUP_DIR = _DATA_DIR / "_test_backup"
 _DATA_FILES = ["dishes.json", "fridge.json", "history.json"]
+_BACKUP_DIR: Path | None = None
+# Track which data files existed before the test so _restore can delete files
+# that the test created from scratch (otherwise the seed survives forever).
+_PRE_EXISTED: dict[str, bool] = {}
+_SESSIONS_PRE_EXISTED: bool = False
 
 
 def _backup():
-    _BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    global _BACKUP_DIR, _SESSIONS_PRE_EXISTED
+    if _BACKUP_DIR is not None and _BACKUP_DIR.exists():
+        shutil.rmtree(_BACKUP_DIR)
+    _BACKUP_DIR = Path(tempfile.mkdtemp(prefix="meal_manager_test_"))
     for name in _DATA_FILES:
         src = _DATA_DIR / name
+        _PRE_EXISTED[name] = src.exists()
         if src.exists():
             shutil.copy2(src, _BACKUP_DIR / name)
-    # Also back up sessions dir
     sessions = _DATA_DIR / "sessions"
-    backup_sessions = _BACKUP_DIR / "sessions"
+    _SESSIONS_PRE_EXISTED = sessions.exists()
     if sessions.exists():
-        if backup_sessions.exists():
-            shutil.rmtree(backup_sessions)
-        shutil.copytree(sessions, backup_sessions)
+        shutil.copytree(sessions, _BACKUP_DIR / "sessions")
 
 
 def _restore():
+    global _BACKUP_DIR
+    if _BACKUP_DIR is None:
+        return
     for name in _DATA_FILES:
         backup = _BACKUP_DIR / name
+        target = _DATA_DIR / name
         if backup.exists():
-            shutil.copy2(backup, _DATA_DIR / name)
-    # Restore sessions dir
+            shutil.copy2(backup, target)
+        elif not _PRE_EXISTED.get(name, False) and target.exists():
+            # Test created this file from scratch — clean it up.
+            target.unlink()
     sessions = _DATA_DIR / "sessions"
     backup_sessions = _BACKUP_DIR / "sessions"
     if sessions.exists():
         shutil.rmtree(sessions)
     if backup_sessions.exists():
         shutil.copytree(backup_sessions, sessions)
+    elif _SESSIONS_PRE_EXISTED:
+        # Backup was missing but the dir existed pre-test — recreate empty.
+        sessions.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(_BACKUP_DIR)
+    _BACKUP_DIR = None
+    _PRE_EXISTED.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -443,19 +460,21 @@ def test_dii_full_lifecycle():
     check("recalculation_needed", state["recalculation_needed"] is True)
     check("pending_recalculation", state["pending_recalculation"] is True)
 
-    # 7. Re-init (simulating agent recalculation) -- reuse session by creating new one
+    # 7. Re-init in place (recalculation reuses the same session_id)
     state = parse(init_ingredient_session({
+        "session_id": sid,
         "dish_name": "Pizza Margherita",
         "ingredients": ["harina", "tomate", "queso de cabra"],
         "is_essential": [True, True, True],
         "pre_select_top_n": 3,
     }))
-    sid2 = state["session_id"]
-    check("new session for recalculation", sid2 != sid)
+    check("recalc reuses same session_id", state["session_id"] == sid)
     check("queso de cabra pre-selected", "queso de cabra" in state["essential_ingredients"])
+    check("recalculation flag cleared after re-init",
+          state["pending_recalculation"] is False)
 
     # 8. Finalize
-    state = parse(finalize_ingredient_session({"session_id": sid2}))
+    state = parse(finalize_ingredient_session({"session_id": sid}))
     check("finalized", state["finalized"] is True)
     check("committed to dish", state["committed_to_dish"] is True)
     check("committed to fridge", state["committed_to_fridge"] is True)

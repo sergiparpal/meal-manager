@@ -18,7 +18,7 @@ python3 test_hermes.py
 python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path('.').resolve().parent)); t = importlib.import_module('.tools', pathlib.Path('.').resolve().name); print(t.get_meal_suggestions({}))"
 ```
 
-There is no build step, linter, or test framework. `test_hermes.py` is a script that exercises core tools end-to-end.
+There is no build step or linter. `test_hermes.py` and `test_unit.py` are plain Python scripts with assertions, not a pytest/unittest harness.
 
 ## Architecture
 

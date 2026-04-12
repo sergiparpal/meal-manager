@@ -12,7 +12,7 @@ standard library and persists state in JSON files under `data/`.
 - No third-party dependencies.
 - No build step is configured.
 - No lint step is configured.
-- Tests are plain Python scripts, not pytest/unittest cases.
+- Tests are plain Python scripts with assertions, not a pytest/unittest harness.
 - Keep the plugin entry point, schemas, handlers, and skill file aligned.
 - Relative imports are required inside the package.
 - Preserve the existing JSON data formats and tool names.
@@ -131,6 +131,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 ## Domain Rules
 
 - Ingredient and dish names are normalized with `strip().lower()` semantics.
+- Cooking history keys are normalized to lowercase on load, so `history.json` comparisons are case-insensitive.
 - `Dish.ingredients` maps ingredient name to `bool`.
 - `True` means essential.
 - `False` means optional.

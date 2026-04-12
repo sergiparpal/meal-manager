@@ -42,3 +42,19 @@ def save_fridge(ingredients: list[str]) -> None:
 def load_fridge_set() -> set[str]:
     """Load the fridge inventory as a set for O(1) membership tests."""
     return set(load_fridge())
+
+
+def remove_items_from_fridge(items: list[str]) -> None:
+    """Atomically remove specific items from the fridge if present.
+
+    Used by delta-rollback paths so an aborted operation only undoes its own
+    additions and doesn't clobber concurrent writes.
+    """
+    if not items:
+        return
+    to_remove = set(items)
+    with fridge_lock:
+        fridge = load_fridge()
+        new_fridge = [ing for ing in fridge if ing not in to_remove]
+        if new_fridge != fridge:
+            save_fridge(new_fridge)

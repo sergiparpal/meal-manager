@@ -228,7 +228,9 @@ INIT_INGREDIENT_SESSION_SCHEMA = {
     "description": (
         "Initialize a Dynamic Ingredient Interface session for a dish. "
         "The agent provides ranked ingredient suggestions. Top N are auto-selected. "
-        "Returns session state with the first hidden suggestion revealed."
+        "Returns session state with the first hidden suggestion revealed. "
+        "To recalculate after removing an essential ingredient, pass the existing "
+        "session_id — the session will be reset in place and the same id reused."
     ),
     "type": "object",
     "properties": {
@@ -250,6 +252,13 @@ INIT_INGREDIENT_SESSION_SCHEMA = {
             "type": "integer",
             "minimum": 0,
             "description": "How many top ingredients to auto-select (default 3)",
+        },
+        "session_id": {
+            "type": "string",
+            "description": (
+                "Optional. When recalculating an existing session, pass its id "
+                "here to reset it in place. Omit to create a brand-new session."
+            ),
         },
     },
     "required": ["dish_name", "ingredients", "is_essential"],

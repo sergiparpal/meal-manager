@@ -205,9 +205,18 @@ After each action, the tool response gives you `next_actions` and `instructions`
 
 **5. Recalculation**
 
-If `recalculation_needed` is `true` (happens when removing an essential ingredient), generate a new ranked list and call `init_ingredient_session` again. Warn the user:
+If `recalculation_needed` is `true` (happens when removing an essential ingredient), generate a new ranked list and call `init_ingredient_session` again, **passing the existing `session_id`**. The session is reset in place — the same id keeps working. Warn the user:
 
 > "You've removed potatoes from the omelette. I'm going to regenerate the suggestions..."
+
+```json
+{
+  "session_id": "the-same-id-as-before",
+  "dish_name": "tortilla de patatas",
+  "ingredients": ["huevos", "cebolla", "aceite"],
+  "is_essential": [true, false, false]
+}
+```
 
 **6. Finalization**
 
