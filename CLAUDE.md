@@ -14,13 +14,13 @@ Python 3.12+, no external dependencies (stdlib only).
 
 ```bash
 # Run the integration smoke test
-python3 test_integration_smoke.py
+python3 test_integration.py
 
 # Run a single tool interactively (parent dir must be on sys.path for relative imports)
 python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path('.').resolve().parent)); t = importlib.import_module('.tools', pathlib.Path('.').resolve().name); print(t.get_meal_suggestions({}))"
 ```
 
-There is no build step or linter. `test_integration_smoke.py` and `test_unit.py` are plain Python scripts with assertions, not a pytest/unittest harness.
+There is no build step or linter. `test_integration.py` and `test_unit.py` are plain Python scripts with assertions, not a pytest/unittest harness.
 
 ## Architecture
 
@@ -61,4 +61,4 @@ There is no build step or linter. `test_integration_smoke.py` and `test_unit.py`
 - **DII user interaction via conversation**: The DII flow uses plain text conversation — the agent presents one suggestion at a time and interprets the user's free-text response (e.g. "sí", "pasa", "añade X") to call the appropriate DII tool. The DII tools are platform-agnostic; `skill.md` defines the conversational presentation strategy.
 - **Recalculation signal**: When an essential ingredient is removed from a DII session, the tool returns `recalculation_needed: true`. The LLM decides whether to regenerate the ranked list — the tool layer never calls the LLM itself.
 - **DII session lifecycle**: `init_ingredient_session` → manipulate via add/skip/remove/manual/clear tools → `finalize_ingredient_session` commits to fridge and/or dish catalog. Sessions are in-memory with optional JSON persistence under `data/sessions/`.
-- **Relative imports throughout**: All internal imports use relative form (e.g. `from .src.storage import ...`, `from .dish import ...`) because Hermes loads the plugin as `hermes_plugins.meal_manager`. Absolute imports like `from src.xxx` would fail at runtime. The test file (`test_integration_smoke.py`) bootstraps the package via `importlib` to make relative imports work when running standalone.
+- **Relative imports throughout**: All internal imports use relative form (e.g. `from .src.storage import ...`, `from .dish import ...`) because Hermes loads the plugin as `hermes_plugins.meal_manager`. Absolute imports like `from src.xxx` would fail at runtime. The test file (`test_integration.py`) bootstraps the package via `importlib` to make relative imports work when running standalone.

@@ -56,7 +56,7 @@ An AI assistant invokes the nineteen tool handlers registered via `__init__.py:r
 
    ```bash
    python3 test_unit.py
-   python3 test_integration_smoke.py
+   python3 test_integration.py
    ```
 
 No build step, dependency installation, or configuration is needed. Data files under `data/` are created lazily by the tools when first needed.
@@ -111,14 +111,14 @@ print(t.get_meal_suggestions({}))
 
 Replace `get_meal_suggestions({})` with any other tool call, e.g.:
 
-- `t.update_fridge_inventory({'action': 'add', 'ingredients': ['huevos', 'arroz']})`
+- `t.update_fridge_inventory({'action': 'add', 'ingredients': ['chicken', 'rice']})`
 - `t.get_quick_shopping_list({})`
-- `t.register_cooked_meal({'dish_name': 'arroz con pollo'})`
+- `t.register_cooked_meal({'dish_name': 'rice with chicken'})`
 
 ### Running the Integration Test
 
 ```bash
-python3 test_integration_smoke.py
+python3 test_integration.py
 ```
 
 This script seeds its own test data, exercises all nineteen tools end-to-end, and restores the original data files afterwards.
@@ -150,10 +150,10 @@ meal-manager/
 ├── schemas.py             # JSON schemas for all nineteen tools (named constants)
 ├── tools.py               # Handler functions (args dict → JSON string)
 ├── test_unit.py           # Unit tests for domain logic modules
+├── test_integration.py    # Integration smoke test
 ├── skill.md               # Prompt instructions defining when/how to call each tool
 ├── AGENTS.md              # Repository guidance for agentic coding work
 ├── CLAUDE.md              # Development guidelines for Claude Code
-├── test_integration_smoke.py  # Integration smoke test
 ├── LICENSE                # GPLv3 license text
 └── README.md
 ```
@@ -201,7 +201,7 @@ Contributions are welcome. To get started:
 
 1. Fork the repository.
 2. Create a feature branch (`git checkout -b feature/my-feature`).
-3. Make your changes and verify them with `python3 test_unit.py` and `python3 test_integration_smoke.py`.
+3. Make your changes and verify them with `python3 test_unit.py` and `python3 test_integration.py`.
 4. Commit your changes and open a Pull Request.
 
 Please ensure all ingredient and dish names follow the lowercase/stripped normalization convention used throughout the codebase.

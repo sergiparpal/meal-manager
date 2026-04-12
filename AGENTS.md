@@ -24,7 +24,7 @@ standard library and persists state in JSON files under `data/`.
 - Run the integration smoke test:
 
 ```bash
-python3 test_integration_smoke.py
+python3 test_integration.py
 ```
 
 - Run the unit test script for domain logic:
@@ -48,7 +48,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path('.').resolve().parent))
-m = importlib.import_module('.test_integration_smoke', pathlib.Path('.').resolve().name)
+m = importlib.import_module('.test_integration', pathlib.Path('.').resolve().name)
 m._backup()
 m._seed()
 try:
@@ -157,7 +157,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 ## Testing
 
 - `test_unit.py` covers pure logic in `src/dish.py`, `src/suggestion.py`, `src/shopping.py`, and `_normalize_ingredients`.
-- `test_integration_smoke.py` is the end-to-end smoke test for all tool handlers.
+- `test_integration.py` is the end-to-end smoke test for all tool handlers.
 - The integration script backs up `data/`, seeds deterministic fixtures, and restores the original files afterward.
 - It intentionally exercises error cases and may print stack traces for expected failures.
 - For a single integration scenario, call the helper setup functions around one `test_*` function.
