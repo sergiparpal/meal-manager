@@ -4,7 +4,7 @@ Backs up data files before running and restores them afterwards so the test
 is idempotent and never pollutes live data.
 
 Usage:
-    python3 test_hermes.py
+    python3 test_integration_smoke.py
 """
 
 import importlib

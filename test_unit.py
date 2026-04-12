@@ -31,7 +31,7 @@ suggest_quick_shopping = _shopping_mod.suggest_quick_shopping
 _normalize_ingredients = _tools_mod._normalize_ingredients
 
 # ---------------------------------------------------------------------------
-# Assertion helper (same style as test_hermes.py)
+# Assertion helper (same style as test_integration_smoke.py)
 # ---------------------------------------------------------------------------
 
 _passed = 0

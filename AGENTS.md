@@ -2,6 +2,8 @@
 
 Repository guidance for agentic coding work in `meal-manager`.
 
+Read `CLAUDE.md` before starting — it contains additional repository-specific guidance that should be consulted alongside this file and kept consistent with it.
+
 This repo is a Hermes plugin that manages meals, fridge inventory, recipe data,
 and Dynamic Ingredient Interface (DII) sessions. It uses only the Python
 standard library and persists state in JSON files under `data/`.
@@ -22,7 +24,7 @@ standard library and persists state in JSON files under `data/`.
 - Run the integration smoke test:
 
 ```bash
-python3 test_hermes.py
+python3 test_integration_smoke.py
 ```
 
 - Run the unit test script for domain logic:
@@ -46,7 +48,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path('.').resolve().parent))
-m = importlib.import_module('.test_hermes', pathlib.Path('.').resolve().name)
+m = importlib.import_module('.test_integration_smoke', pathlib.Path('.').resolve().name)
 m._backup()
 m._seed()
 try:
@@ -155,7 +157,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 ## Testing
 
 - `test_unit.py` covers pure logic in `src/dish.py`, `src/suggestion.py`, `src/shopping.py`, and `_normalize_ingredients`.
-- `test_hermes.py` is the end-to-end smoke test for all tool handlers.
+- `test_integration_smoke.py` is the end-to-end smoke test for all tool handlers.
 - The integration script backs up `data/`, seeds deterministic fixtures, and restores the original files afterward.
 - It intentionally exercises error cases and may print stack traces for expected failures.
 - For a single integration scenario, call the helper setup functions around one `test_*` function.
@@ -171,4 +173,4 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 ## Editor Rules
 
 - No `.cursor/rules/`, `.cursorrules`, or `.github/copilot-instructions.md` files are present in this repository snapshot.
-- `CLAUDE.md` contains additional repo-specific guidance and should stay consistent with this file.
+- `CLAUDE.md` contains additional repo-specific guidance and must be read before starting any work alongside this file; the two should stay consistent.

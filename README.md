@@ -56,7 +56,7 @@ An AI assistant invokes the nineteen tool handlers registered via `__init__.py:r
 
    ```bash
    python3 test_unit.py
-   python3 test_hermes.py
+   python3 test_integration_smoke.py
    ```
 
 No build step, dependency installation, or configuration is needed. Data files under `data/` are created lazily by the tools when first needed.
@@ -118,7 +118,7 @@ Replace `get_meal_suggestions({})` with any other tool call, e.g.:
 ### Running the Integration Test
 
 ```bash
-python3 test_hermes.py
+python3 test_integration_smoke.py
 ```
 
 This script seeds its own test data, exercises all nineteen tools end-to-end, and restores the original data files afterwards.
@@ -131,14 +131,6 @@ For the fastest feedback on pure domain logic, run `python3 test_unit.py`. It co
 
 ```
 meal-manager/
-├── plugin.yaml            # Hermes plugin manifest (name + provided tools)
-├── __init__.py            # Plugin entry point — register(ctx) wires tools + skill
-├── schemas.py             # JSON schemas for all nineteen tools (named constants)
-├── tools.py               # Handler functions (args dict → JSON string)
-├── test_unit.py           # Unit tests for domain logic modules
-├── skill.md               # Prompt instructions defining when/how to call each tool
-├── AGENTS.md              # Repository guidance for agentic coding work
-├── CLAUDE.md              # Development guidelines for Claude Code
 ├── src/
 │   ├── __init__.py        # Package marker
 │   ├── dish.py            # Dish dataclass — recipe model (essential/optional ingredients)
@@ -153,7 +145,15 @@ meal-manager/
 │   ├── fridge.json        # Current fridge inventory (list of ingredients)
 │   ├── history.json       # Cooking history (dish name → last-cooked ISO date)
 │   └── sessions/          # (created lazily) DII session backups for crash recovery
-├── test_hermes.py         # Integration smoke test
+├── plugin.yaml            # Hermes plugin manifest (name + provided tools)
+├── __init__.py            # Plugin entry point — register(ctx) wires tools + skill
+├── schemas.py             # JSON schemas for all nineteen tools (named constants)
+├── tools.py               # Handler functions (args dict → JSON string)
+├── test_unit.py           # Unit tests for domain logic modules
+├── skill.md               # Prompt instructions defining when/how to call each tool
+├── AGENTS.md              # Repository guidance for agentic coding work
+├── CLAUDE.md              # Development guidelines for Claude Code
+├── test_integration_smoke.py  # Integration smoke test
 ├── LICENSE                # GPLv3 license text
 └── README.md
 ```
@@ -201,7 +201,7 @@ Contributions are welcome. To get started:
 
 1. Fork the repository.
 2. Create a feature branch (`git checkout -b feature/my-feature`).
-3. Make your changes and verify them with `python3 test_unit.py` and `python3 test_hermes.py`.
+3. Make your changes and verify them with `python3 test_unit.py` and `python3 test_integration_smoke.py`.
 4. Commit your changes and open a Pull Request.
 
 Please ensure all ingredient and dish names follow the lowercase/stripped normalization convention used throughout the codebase.
