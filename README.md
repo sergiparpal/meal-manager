@@ -83,6 +83,53 @@ No build step, dependency installation, or configuration is needed. Data files u
 
 ## Usage
 
+### As a Hermes Agent User
+
+Once the plugin is installed in your Hermes agent, you never invoke any tool yourself. You talk to the agent in natural language and it translates your intent into the right tool calls. There are no commands to memorize — say what you mean and the agent will handle the bookkeeping.
+
+Example phrases and what the agent will do behind the scenes:
+
+**Deciding what to cook**
+
+- *"What should I cook tonight?"* — ranks your cookable dishes and proposes the best one.
+- *"We had carbonara."* — records the meal, applies the 2-day cooldown, and removes its essential ingredients from the fridge automatically.
+
+**Shopping**
+
+- *"I'm heading to the grocery store, what should I buy?"* — lists single ingredients that, once purchased, unlock the best dishes.
+- *"I bought onions, peppers, and chicken."* — updates the fridge and proposes new meal ideas with what you have now.
+- *"We ran out of milk."* — removes it from the fridge inventory.
+
+**Managing the fridge**
+
+- *"What do I have in the fridge?"* — returns the current inventory.
+- *"Empty the fridge, I'm going on vacation."* — clears all fridge contents.
+
+**Teaching new recipes**
+
+- *"I usually make potato omelette."* — the agent infers ingredients from culinary knowledge, shows them for your confirmation, then saves the recipe.
+- *"Add lasagna, cannelloni, and paella to my recipes."* — adds several dishes in a single pass.
+- *"Carbonara doesn't carry cream, fix the recipe."* — replaces the ingredient list of an existing dish.
+- *"Delete the chicken curry recipe."* — removes it from the catalog.
+
+**Correcting mistakes**
+
+- *"I didn't actually cook that yesterday."* — removes the meal from history so it can be suggested again without waiting for the cooldown.
+
+**Interactive ingredient picking (DII)**
+
+When you add a new dish without listing its ingredients, the agent starts a step-by-step session. It proposes one ingredient at a time and you reply in plain text:
+
+> **Agent:** I suggest **parmesan cheese** (optional). Add it, skip it, or something else?
+>
+> **You:** skip — add pepper instead
+>
+> **Agent:** Added pepper. Next suggestion: **garlic** (optional)…
+
+Reply naturally — *"yes"*, *"skip"*, *"remove X"*, *"also add Y"*, or *"done"* when finished. There's no menu to navigate.
+
+**First time?** If your catalog is empty or has fewer than five dishes, the agent will proactively offer to help populate it — just tell it what you usually cook and it will infer ingredients, confirm them with you, and save everything in one batch.
+
 ### As a Hermes Plugin
 
 The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `__init__.py`. It registers nineteen tools:
