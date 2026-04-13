@@ -6,6 +6,24 @@ An AI assistant invokes the nineteen tool handlers registered via `__init__.py:r
 
 ---
 
+## Design Philosophy: Solving Friction
+
+Traditional fridge inventory apps fail because they turn the user into a data entry clerk. Tracking every ingredient or recording every meal requires constant manual input. The cost (immediate effort) outweighs the reward (better meal planning), and users abandon the system.
+
+This plugin solves that by introducing an AI agent as an intermediary. The user never interacts with the database directly — the agent manages the plugin on their behalf.
+
+**Interface abstraction via natural language.** Tools like `update_fridge_inventory` or `register_cooked_meal` are triggered by the agent interpreting conversation ("I bought onions", "we had carbonara tonight"), not by the user clicking anything.
+
+**Proactive action chaining.** The agent closes the loop automatically: buying ingredients triggers meal suggestions; confirming a dish registers it as cooked and removes its essentials from the fridge. No follow-up input needed.
+
+**Culinary inference offloads cataloging.** The agent uses its own knowledge to infer ingredients from dish names — the user says "I usually make tortilla" and the agent populates the recipe. No manual ingredient lists required.
+
+**Ambiguity absorption.** Spelling variance, synonyms, and vague commands ("skip", "add X", "pasa") are resolved by the agent before reaching the plugin. The database stays clean while the user stays in conversation mode.
+
+The result: the plugin shifts the bookkeeping burden from the human to the LLM, removing the friction points that cause inventory systems to fail.
+
+---
+
 ## Features
 
 - **Smart Meal Suggestions** — Ranks every dish in the catalog using a weighted scoring algorithm that combines ingredient availability (60%) with cooking recency (40%). Dishes cooked fewer than 2 days ago are automatically excluded.
