@@ -2,7 +2,8 @@
 
 Manages interactive ingredient-selection sessions where a ranked list of
 ingredients is revealed one at a time (the "probability funnel").  Sessions
-live in memory with optional JSON backup for crash recovery.
+live in memory and are mirrored to a JSON backup after every mutation for
+crash recovery.
 """
 
 import json

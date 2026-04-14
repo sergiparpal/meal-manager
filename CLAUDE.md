@@ -13,6 +13,9 @@ Python 3.12+, no external dependencies (stdlib only).
 ## Commands
 
 ```bash
+# Run the unit test script for pure domain logic
+python3 test_unit.py
+
 # Run the integration smoke test
 python3 test_integration.py
 
@@ -40,7 +43,7 @@ There is no build step or linter. `test_integration.py` and `test_unit.py` are p
 - **`history.py`** — Cooking history persistence (`data/history.json`). Maps dish name → last-cooked ISO date. Keys are normalized to lowercase on load.
 - **`storage.py`** — Recipe catalog persistence (`data/dishes.json`). `load_dishes()` / `save_dishes()` handle the `{"dishes": [...]}` wrapper.
 - **`fridge.py`** — Fridge persistence (`data/fridge.json`). Simple list of lowercase ingredient strings, deduplicated on load.
-- **`dii.py`** — Dynamic Ingredient Interface session engine. Manages stateful ingredient-selection sessions with a "probability funnel" (ranked suggestions revealed one at a time). `DIISession` dataclass holds per-session state in memory (`_sessions` dict) with optional JSON backup under `data/sessions/`. Sessions expire after 30 minutes. Integrates with `fridge.py` and `storage.py` on finalization.
+- **`dii.py`** — Dynamic Ingredient Interface session engine. Manages stateful ingredient-selection sessions with a "probability funnel" (ranked suggestions revealed one at a time). `DIISession` dataclass holds per-session state in memory (`_sessions` dict) mirrored to a JSON backup under `data/sessions/` after every mutation (for crash recovery). Sessions expire after 30 minutes. Integrates with `fridge.py` and `storage.py` on finalization.
 
 ### Data files (`data/`)
 
@@ -58,7 +61,7 @@ There is no build step or linter. `test_integration.py` and `test_unit.py` are p
 - **All ingredient names are normalized to lowercase/stripped** throughout the codebase. Dish names are also lowercased for comparison.
 - **JSON keys are in English** (`name`, `ingredients`, `dishes`) matching the Python code.
 - **DII probability funnel**: Sessions hold a hidden queue of ranked ingredients. Only one suggestion is revealed at a time. The LLM provides the ranked list; the tool layer manages the reveal-one-at-a-time state.
-- **DII user interaction via conversation**: The DII flow uses plain text conversation — the agent presents one suggestion at a time and interprets the user's free-text response (e.g. "sí", "pasa", "añade X") to call the appropriate DII tool. The DII tools are platform-agnostic; `skill.md` defines the conversational presentation strategy.
+- **DII user interaction via conversation**: The DII flow uses plain text conversation — the agent presents one suggestion at a time and interprets the user's free-text response (e.g. "yes", "skip", "add X") to call the appropriate DII tool. The DII tools are platform-agnostic; `skill.md` defines the conversational presentation strategy.
 - **Recalculation signal**: When an essential ingredient is removed from a DII session, the tool returns `recalculation_needed: true`. The LLM decides whether to regenerate the ranked list — the tool layer never calls the LLM itself.
 - **DII session lifecycle**: `init_ingredient_session` → manipulate via add/skip/remove/manual/clear tools → `finalize_ingredient_session` commits to fridge and/or dish catalog. Sessions are in-memory with optional JSON persistence under `data/sessions/`.
-- **Relative imports throughout**: All internal imports use relative form (e.g. `from .src.storage import ...`, `from .dish import ...`) because Hermes loads the plugin as `hermes_plugins.meal_manager`. Absolute imports like `from src.xxx` would fail at runtime. The test file (`test_integration.py`) bootstraps the package via `importlib` to make relative imports work when running standalone.
+- **Relative imports throughout**: All internal imports use relative form (e.g. `from .src.storage import ...`, `from .dish import ...`) because Hermes loads the plugin as `hermes_plugins.meal_manager`. Absolute imports like `from src.xxx` would fail at runtime. The test files (`test_integration.py` and `test_unit.py`) bootstrap the package via `importlib` to make relative imports work when running standalone.

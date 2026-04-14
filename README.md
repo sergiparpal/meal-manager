@@ -18,7 +18,7 @@ This plugin solves that by introducing an AI agent as an intermediary. The user 
 
 **Culinary inference offloads cataloging.** The agent uses its own knowledge to infer ingredients from dish names — the user says "I usually make tortilla" and the agent populates the recipe. No manual ingredient lists required.
 
-**Ambiguity absorption.** Spelling variance, synonyms, and vague commands ("skip", "add X", "pasa") are resolved by the agent before reaching the plugin. The database stays clean while the user stays in conversation mode.
+**Ambiguity absorption.** Spelling variance, synonyms, and vague commands ("skip", "add X", "done") are resolved by the agent before reaching the plugin. The database stays clean while the user stays in conversation mode.
 
 The result: the plugin shifts the bookkeeping burden from the human to the LLM, removing the friction points that cause inventory systems to fail.
 
@@ -32,7 +32,7 @@ The result: the plugin shifts the bookkeeping burden from the human to the LLM, 
 - **Cooking History Tracking** — Logs cooked meals with ISO dates. History keys are normalized to lowercase on load, so comparisons are case-insensitive.
 - **Auto-Cleanup on Cook** — When a meal is registered as cooked, its essential ingredients are automatically removed from the fridge inventory.
 - **Essential vs. Optional Ingredients** — Recipes distinguish between must-have ingredients (required to cook) and nice-to-have ingredients (boost the suggestion score but are not blocking).
-- **Dynamic Ingredient Interface (DII)** — Interactive, stateful ingredient selection via plain text conversation. A "probability funnel" reveals ranked ingredient suggestions one at a time. The agent interprets free-text user responses (e.g. "sí", "pasa", "añade X") to drive add/skip/remove/manual-add controls. Removing an essential ingredient triggers a recalculation signal so the agent can re-evaluate suggestions.
+- **Dynamic Ingredient Interface (DII)** — Interactive, stateful ingredient selection via plain text conversation. A "probability funnel" reveals ranked ingredient suggestions one at a time. The agent interprets free-text user responses (e.g. "yes", "skip", "add X") to drive add/skip/remove/manual-add controls. Removing an essential ingredient triggers a recalculation signal so the agent can re-evaluate suggestions.
 
 ---
 

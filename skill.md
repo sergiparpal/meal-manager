@@ -149,8 +149,8 @@ Interactive system for building a dish's ingredient list step by step through pl
 - `dii_remove_ingredient` — Remove an already selected ingredient
 - `dii_add_manual` — Add a custom ingredient
 - `dii_clear_all` — Clear all selected ingredients
-- `dii_get_state` — Query the state without modifying it
 - `finalize_ingredient_session` — Save and close the session
+- `dii_get_state` — Query the state without modifying it
 
 ### Conversational flow
 
@@ -220,7 +220,7 @@ If `recalculation_needed` is `true` (happens when removing an essential ingredie
 
 **6. Finalization**
 
-`finalize_ingredient_session` saves the ingredients to the fridge and creates/updates the dish. Confirm:
+`finalize_ingredient_session` saves the ingredients to the fridge and creates/updates the dish. Both commits are enabled by default; pass `commit_to_fridge: false` to skip the fridge update or `commit_to_dish: false` to skip saving the recipe. Confirm:
 
 > Done! I've saved **pasta carbonara** with 6 ingredients. I also added to the fridge what you didn't have.
 

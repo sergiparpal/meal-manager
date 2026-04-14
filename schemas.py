@@ -158,9 +158,24 @@ EDIT_DISH_SCHEMA = {
             "description": "exact dish name to edit",
         },
         "ingredients": {
-            "type": "object",
-            "additionalProperties": {"type": "boolean"},
-            "description": "new ingredient name -> true (essential) or false (optional)",
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": {"type": "boolean"},
+                    "description": "ingredient name -> true (essential) or false (optional)",
+                },
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "list of ingredient names (all default to essential)",
+                },
+            ],
+            "description": (
+                "New ingredients for the dish. Either an object mapping "
+                "ingredient name to boolean (true = essential, false = "
+                "optional), or a plain list of ingredient names (all "
+                "treated as essential)."
+            ),
         },
     },
     "required": ["dish_name", "ingredients"],
@@ -319,8 +334,8 @@ DII_REMOVE_INGREDIENT_SCHEMA = {
 DII_ADD_MANUAL_SCHEMA = {
     "description": (
         "Manually add an ingredient to a DII session that was not in the "
-        "suggestion queue. Use when the user types a custom ingredient via "
-        "ForceReply or text input."
+        "suggestion queue. Use when the user names a custom ingredient to "
+        "add directly rather than accepting the current suggestion."
     ),
     "type": "object",
     "properties": {
