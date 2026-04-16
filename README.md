@@ -6,21 +6,21 @@ An AI assistant invokes the nineteen tool handlers registered via `__init__.py:r
 
 ---
 
-## Design Philosophy: Solving Friction
+## Design Philosophy: A Deterministic Core with a Conversational Shell
 
-Traditional fridge inventory apps fail because they turn the user into a data entry clerk. Tracking every ingredient or recording every meal requires constant manual input. The cost (immediate effort) outweighs the reward (better meal planning), and users abandon the system.
+Traditional meal-planning apps fail in two ways. Some turn the user into a data-entry clerk, demanding constant manual input until the user abandons the system. Others hand so much control to an AI that behavior becomes unpredictable — suggestions change meaning between sessions, state drifts quietly, and users lose the trust that makes the tool useful.
 
-This plugin solves that by introducing an AI agent as an intermediary. The user never interacts with the database directly — the agent manages the plugin on their behalf.
+meal-manager resolves this by separating concerns cleanly. The LLM acts as a **semantic translator** at the boundary: it interprets natural-language intent ("we had carbonara tonight", "add lasagna to my recipes") and maps it onto a typed, validated tool call. The plugin's core is a **deterministic state machine** — scoring, inventory updates, recipe storage, DII session transitions, and persistence are all pure, testable Python code with explicit constants and no model round-trips.
 
-**Interface abstraction via natural language.** Tools like `update_fridge_inventory` or `register_cooked_meal` are triggered by the agent interpreting conversation ("I bought onions", "we had carbonara tonight"), not by the user clicking anything.
+The result is a system that offers the user the freedom of conversation while guaranteeing the consistency of code. Ambiguity is resolved once, at the edge. Every decision past that edge is reproducible, auditable, and cheap.
 
-**Proactive action chaining.** The agent closes the loop automatically: buying ingredients triggers meal suggestions; confirming a dish registers it as cooked and removes its essentials from the fridge. No follow-up input needed.
+**The LLM is a Translator, Not a Judge.** The model interprets user intent and maps it onto a tool schema. It does not rank meals, decide whether an ingredient is essential, or track session state — those belong to deterministic Python modules. This line stays fixed when the underlying model changes, the prompt drifts, or the user rephrases the same request two different ways.
 
-**Culinary inference offloads cataloging.** The agent uses its own knowledge to infer ingredients from dish names — the user says "I usually make tortilla" and the agent populates the recipe. No manual ingredient lists required.
+**Ambiguity Stops at the Schema.** Free-text input is welcome in conversation; past the tool boundary, every argument is typed, normalized, and explicit. Schemas refuse fuzzy values — the LLM must commit to a concrete `dish_name`, a concrete `action` enum, a concrete `is_essential` boolean. The cost of interpretation is paid once, at parse time, and never re-paid by downstream logic. The database stays clean by construction, not by convention.
 
-**Ambiguity absorption.** Spelling variance, synonyms, and vague commands ("skip", "add X", "done") are resolved by the agent before reaching the plugin. The database stays clean while the user stays in conversation mode.
+**Reproducibility as User Trust.** Given identical fridge contents, recipe catalog, and cooking history, the plugin always produces identical suggestions in identical order. The 60/40 match/recency blend, the 80/20 essential/optional weighting, the 2-day cooldown, and the 14-day recency cap are explicit constants in source — not emergent model output. Users can predict the system because the system predicts itself; every state transition can be replayed from the JSON files under `data/`.
 
-The result: the plugin shifts the bookkeeping burden from the human to the LLM, removing the friction points that cause inventory systems to fail.
+**Tokens Are a Cost, Not a Feature.** Work the code can do does not belong in the prompt. Ranking, session state, ingredient normalization, and persistence run in microseconds without a model round-trip. The result is a plugin that is cheap to run, fast to respond, testable without mocking an LLM, and structurally incapable of hallucinating itself into an inconsistent state.
 
 ---
 
