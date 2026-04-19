@@ -162,23 +162,23 @@ See [`skill.md`](skill.md) for detailed instructions on when and how an AI assis
 
 ### Interactive Examples
 
-Since the module uses relative imports, standalone invocation requires bootstrapping the package via `importlib`. A helper one-liner:
+Each tool lives in its own module under `src/handlers/` and exposes a `HANDLER` callable. Since the package uses relative imports, standalone invocation requires bootstrapping it via `importlib`:
 
 ```bash
 # Get dinner suggestions based on current fridge contents
 python3 -c "
 import sys, importlib, pathlib
 sys.path.insert(0, str(pathlib.Path('.').resolve().parent))
-t = importlib.import_module('.tools', pathlib.Path('.').resolve().name)
-print(t.get_meal_suggestions({}))
+m = importlib.import_module('.src.handlers.get_meal_suggestions', pathlib.Path('.').resolve().name)
+print(m.HANDLER({}))
 "
 ```
 
-Replace `get_meal_suggestions({})` with any other tool call, e.g.:
+Swap `get_meal_suggestions` for any other module under `src/handlers/`, for example:
 
-- `t.update_fridge_inventory({'action': 'add', 'ingredients': ['chicken', 'rice']})`
-- `t.get_quick_shopping_list({})`
-- `t.register_cooked_meal({'dish_name': 'rice with chicken'})`
+- `update_fridge_inventory.HANDLER({'action': 'add', 'ingredients': ['chicken', 'rice']})`
+- `get_quick_shopping_list.HANDLER({})`
+- `register_cooked_meal.HANDLER({'dish_name': 'rice with chicken'})`
 
 ### Running the Integration Test
 
@@ -197,29 +197,58 @@ For the fastest feedback on pure domain logic, run `python3 test_unit.py`. It co
 ```
 meal-manager/
 ├── src/
-│   ├── __init__.py        # Package marker
-│   ├── dish.py            # Dish dataclass — recipe model (essential/optional ingredients)
-│   ├── suggestion.py      # Scoring engine — ranks dishes by availability + recency
-│   ├── shopping.py        # Shopping suggestions — single-ingredient unlock logic
-│   ├── history.py         # Cooking history persistence (data/history.json)
-│   ├── storage.py         # Recipe catalog persistence (data/dishes.json)
-│   ├── fridge.py          # Fridge inventory persistence (data/fridge.json)
-│   └── dii.py             # Dynamic Ingredient Interface — stateful session engine
+│   ├── __init__.py            # Package marker + atomic_write_json helper
+│   ├── dish.py                # Dish dataclass — recipe model (essential/optional ingredients)
+│   ├── suggestion.py          # Scoring engine — ranks dishes by availability + recency
+│   ├── shopping.py            # Shopping suggestions — single-ingredient unlock logic
+│   ├── handlers/              # One module per registered tool (NAME, SCHEMA, HANDLER)
+│   │   ├── __init__.py        # iter_tools() walks the package and yields each triple
+│   │   ├── _common.py         # Shared helpers (err, normalization, input limits)
+│   │   ├── get_meal_suggestions.py
+│   │   ├── get_quick_shopping_list.py
+│   │   ├── update_fridge_inventory.py
+│   │   ├── register_cooked_meal.py
+│   │   ├── delete_history_entry.py
+│   │   ├── list_fridge.py
+│   │   ├── add_dish.py
+│   │   ├── add_dishes_batch.py
+│   │   ├── delete_dish.py
+│   │   ├── edit_dish.py
+│   │   ├── clear_fridge.py
+│   │   ├── init_ingredient_session.py
+│   │   ├── dii_add_suggested.py
+│   │   ├── dii_skip_suggested.py
+│   │   ├── dii_remove_ingredient.py
+│   │   ├── dii_add_manual.py
+│   │   ├── dii_clear_all.py
+│   │   ├── dii_get_state.py
+│   │   └── finalize_ingredient_session.py
+│   ├── repositories/          # Persistence layer behind Protocol seams
+│   │   ├── __init__.py        # Singletons + configure(data_dir)
+│   │   ├── base.py            # DishRepository / FridgeRepository / HistoryRepository
+│   │   ├── json_dish.py       # Recipe catalog persistence (data/dishes.json)
+│   │   ├── json_fridge.py     # Fridge inventory persistence (data/fridge.json)
+│   │   └── json_history.py    # Cooking history persistence (data/history.json)
+│   └── dii/                   # Dynamic Ingredient Interface
+│       ├── __init__.py        # Public API + configure(session_dir)
+│       ├── session.py         # DIISession dataclass + serialization
+│       ├── store.py           # In-memory map mirrored to data/sessions/ with TTL
+│       ├── engine.py          # Pure mutations on a DIISession
+│       ├── presenter.py       # LLM-facing response shape
+│       └── finalizer.py       # Commits a session via injected repositories
 ├── data/
-│   ├── dishes.json        # Recipe catalog (dishes with ingredients)
-│   ├── fridge.json        # Current fridge inventory (list of ingredients)
-│   ├── history.json       # Cooking history (dish name → last-cooked ISO date)
-│   └── sessions/          # (created lazily) DII session backups for crash recovery
-├── plugin.yaml            # Hermes plugin manifest (name + provided tools)
-├── __init__.py            # Plugin entry point — register(ctx) wires tools + skill
-├── schemas.py             # JSON schemas for all nineteen tools (named constants)
-├── tools.py               # Handler functions (args dict → JSON string)
-├── test_unit.py           # Unit tests for domain logic modules
-├── test_integration.py    # Integration smoke test
-├── skill.md               # Prompt instructions defining when/how to call each tool
-├── AGENTS.md              # Repository guidance for agentic coding work
-├── CLAUDE.md              # Development guidelines for Claude Code
-├── LICENSE                # GPLv3 license text
+│   ├── dishes.json            # Recipe catalog (dishes with ingredients)
+│   ├── fridge.json            # Current fridge inventory (list of ingredients)
+│   ├── history.json           # Cooking history (dish name → last-cooked ISO date)
+│   └── sessions/              # (created lazily) DII session backups for crash recovery
+├── plugin.yaml                # Hermes plugin manifest (name + provided tools)
+├── __init__.py                # Plugin entry point — register(ctx, *, data_dir=None)
+├── test_unit.py               # Unit tests for domain logic modules
+├── test_integration.py        # Integration smoke test
+├── skill.md                   # Prompt instructions defining when/how to call each tool
+├── AGENTS.md                  # Repository guidance for agentic coding work
+├── CLAUDE.md                  # Development guidelines for Claude Code
+├── LICENSE                    # GPLv3 license text
 └── README.md
 ```
 

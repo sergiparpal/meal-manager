@@ -15,7 +15,7 @@ standard library and persists state in JSON files under `data/`.
 - No build step is configured.
 - No lint step is configured.
 - Tests are plain Python scripts with assertions, not a pytest/unittest harness.
-- Keep the plugin entry point, schemas, handlers, and skill file aligned.
+- Tools are auto-discovered: each module under `src/handlers/` exports `NAME`, `SCHEMA`, `HANDLER` and is picked up by `iter_tools()`. There is no central registry to keep in sync.
 - Relative imports are required inside the package.
 - Preserve the existing JSON data formats and tool names.
 
@@ -39,7 +39,7 @@ python3 test_unit.py
 python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path('.').resolve().parent)); m = importlib.import_module('.test_unit', pathlib.Path('.').resolve().name); m.test_calculate_score_basic()"
 ```
 
-- Run a single integration-style test function with explicit setup and restore:
+- Run a single integration-style test function with explicit setup and teardown:
 
 ```bash
 python3 - <<'PY'
@@ -49,19 +49,20 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path('.').resolve().parent))
 m = importlib.import_module('.test_integration', pathlib.Path('.').resolve().name)
-m._backup()
-m._seed()
+m._setup_tmp_data()
 try:
     m.test_list_fridge()
 finally:
-    m._restore()
+    m._teardown_tmp_data()
 PY
 ```
+
+`_setup_tmp_data` creates a `tempfile.mkdtemp()` directory, points the repository and DII singletons at it via `configure()`, and seeds deterministic JSON fixtures. `_teardown_tmp_data` deletes the directory. The live `data/` under the repo root is never read or written. `_backup` / `_restore` still exist as compatibility aliases for older recipes.
 
 - Run one tool interactively:
 
 ```bash
-python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path('.').resolve().parent)); t = importlib.import_module('.tools', pathlib.Path('.').resolve().name); print(t.get_meal_suggestions({}))"
+python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path('.').resolve().parent)); m = importlib.import_module('.src.handlers.get_meal_suggestions', pathlib.Path('.').resolve().name); print(m.HANDLER({}))"
 ```
 
 - Prefer the smallest relevant script or direct function call instead of the
@@ -69,7 +70,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 
 ## Imports
 
-- Use relative imports inside the package, for example `from .src.storage import load_dishes`.
+- Use relative imports inside the package, for example `from .src.repositories import dish_repo`.
 - Do not switch to absolute `src.*` imports; Hermes loads the plugin as a
   package, and relative imports are the safe form.
 - Keep standard library imports first, then local imports.
@@ -91,8 +92,8 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 - Use `snake_case` for functions, variables, and module-level helpers.
 - Use `UpperCamelCase` for classes and dataclasses.
 - Use `UPPER_SNAKE_CASE` for constants.
-- Prefix private helpers with `_`.
-- Keep tool handler names stable and descriptive, matching the schema names.
+- Prefix private helpers with `_`. Modules under `src/handlers/` that start with `_` (e.g. `_common.py`) are skipped by the auto-discovery walker.
+- Keep tool handler module names equal to the registered `NAME` constant (e.g. `src/handlers/add_dish.py` exports `NAME = "add_dish"`).
 - Preserve public API names unless there is a concrete reason to change them.
 
 ## Types
@@ -107,11 +108,10 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 ## Error Handling
 
 - Validate user-supplied input at the tool boundary.
-- Raise `ValueError` for invalid lower-level arguments when that keeps the logic clear.
-- Public tool handlers should catch exceptions, log them with `logger.exception(...)`, and return a JSON error payload.
-- Do not let stack traces escape a handler function.
-- Return JSON strings from tool handlers, not raw Python objects.
-- Use `ensure_ascii=False` when serializing user-facing JSON so accented text stays readable.
+- Raise `ValueError` (or `LookupError` for not-found cases) inside handlers — do not catch and reformat. The `@tool_handler(NAME)` decorator from `src/handlers/_common.py` is mandatory on every public handler; it logs the exception via `logger.exception` and converts it into the unified `{"error": str(exc)}` JSON envelope.
+- Handlers return plain Python objects (dict, list, str). The decorator handles `json.dumps(..., ensure_ascii=False)` for both success and error paths.
+- Do not let stack traces escape a handler function — the decorator's outer `try/except` is the single guarantee of that.
+- Internal helpers and engine-layer code may raise freely; the decorator at the boundary is the catch-all.
 
 ## Persistence
 
@@ -121,6 +121,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 - Treat missing or malformed JSON files as empty state unless the caller needs an explicit error.
 - Use UTF-8 for all file I/O.
 - Do not store transient scratch data in `data/` unless the feature explicitly needs persistence.
+- The data directory is injectable. `src/repositories/__init__.py:configure(data_dir)` and `src/dii/__init__.py:configure(session_dir)` redirect the singletons in place; the top-level `register(ctx, *, data_dir=None)` wires both. Tests should never hit the real `data/` — use a tmp dir via `_setup_tmp_data` / `configure`.
 
 ## Concurrency
 
@@ -132,7 +133,8 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 
 ## Domain Rules
 
-- Ingredient and dish names are normalized with `strip().lower()` semantics.
+- Ingredient and dish names are normalized with `strip().lower()` semantics. The normalization rule lives in `Dish._clean(value, *, label)` and is applied via `Dish.normalize_name` / `Dish.normalize_ingredient` (and the `_common.normalize_*` wrappers that add length validation).
+- `Dish.__post_init__` enforces that `Dish.name` is always stored normalized, so downstream consumers compare `dish.name == name` directly — do not add defensive `.strip().lower()` at call sites.
 - Cooking history keys are normalized to lowercase on load, so `history.json` comparisons are case-insensitive.
 - `Dish.ingredients` maps ingredient name to `bool`.
 - `True` means essential.
@@ -147,8 +149,8 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 
 - Make the smallest correct change.
 - Avoid broad refactors unrelated to the task.
-- Do not rename persisted keys, tool names, or schema constants without updating every consumer.
-- Keep `__init__.py` as the registration layer and `tools.py` as the handler layer.
+- Do not rename persisted keys or tool `NAME` constants without updating every consumer (handler module name, `plugin.yaml`, `skill.md`, tests).
+- Keep top-level `__init__.py` minimal — it should only walk `src/handlers/` and inject the skill. Tool definitions belong in their own modules under `src/handlers/`.
 - Do not edit live `data/` files unless the task explicitly requires it.
 - If you touch persistence or DII, run both test scripts before finishing.
 - If you touch a single pure function, the targeted unit test is usually enough.
@@ -158,15 +160,15 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 
 - `test_unit.py` covers pure logic in `src/dish.py`, `src/suggestion.py`, `src/shopping.py`, and `_normalize_ingredients`.
 - `test_integration.py` is the end-to-end smoke test for all tool handlers.
-- The integration script backs up `data/`, seeds deterministic fixtures, and restores the original files afterward.
+- The integration script creates a throw-away tmp directory, points the repositories and DII session store at it via `configure()`, seeds deterministic fixtures, and removes the directory when finished. The real `data/` files are never touched.
 - It intentionally exercises error cases and may print stack traces for expected failures.
-- For a single integration scenario, call the helper setup functions around one `test_*` function.
+- For a single integration scenario, call `_setup_tmp_data` / `_teardown_tmp_data` around one `test_*` function.
 - Prefer the narrowest test that covers the changed code path.
 
 ## Tool And Schema Notes
 
-- Keep `schemas.py` descriptions in sync with handler behavior.
-- Keep `plugin.yaml` aligned with the registered tool list.
+- Keep each handler module's `SCHEMA["description"]` in sync with the actual handler behavior — schema and code live side by side.
+- Keep `plugin.yaml` aligned with the modules under `src/handlers/` (the auto-registration is the source of truth for what is registered, but `plugin.yaml` is read by Hermes for discovery).
 - Keep `skill.md` aligned with DII behavior and user-facing interaction flow.
 - Use `README.md` as the source of truth for the high-level project summary and examples.
 

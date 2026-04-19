@@ -3,20 +3,33 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Dish:
+    """Recipe model.
+
+    Invariant: ``name`` is always stored stripped and lowercased. The
+    ``__post_init__`` enforces this on every construction path (direct,
+    ``from_dict``, dataclass replace), so consumers can compare ``dish.name``
+    by equality without re-normalizing.
+    """
+
     name: str
     ingredients: dict = field(default_factory=dict)
 
+    def __post_init__(self):
+        self.name = self.normalize_name(self.name)
+
+    @staticmethod
+    def _clean(value, *, label):
+        if not isinstance(value, str):
+            raise ValueError(f"{label} must be a string, got {type(value).__name__}")
+        return value.strip().lower()
+
     @staticmethod
     def normalize_ingredient(name):
-        if not isinstance(name, str):
-            raise ValueError(f"ingredient name must be a string, got {type(name).__name__}")
-        return name.strip().lower()
+        return Dish._clean(name, label="ingredient name")
 
     @staticmethod
     def normalize_name(name):
-        if not isinstance(name, str):
-            raise ValueError(f"dish name must be a string, got {type(name).__name__}")
-        return name.strip().lower()
+        return Dish._clean(name, label="dish name")
 
     def add_ingredient(self, ingredient_name, is_essential=True):
         if not isinstance(is_essential, bool):
@@ -47,11 +60,11 @@ class Dish:
         if not name:
             raise ValueError("dish name cannot be empty")
 
-        raw = data.get("ingredients", {})
-        if not isinstance(raw, dict):
+        raw_ingredients = data.get("ingredients", {})
+        if not isinstance(raw_ingredients, dict):
             raise ValueError("ingredients must be a dict")
 
         dish = cls(name=name)
-        for ingredient_name, is_essential in raw.items():
+        for ingredient_name, is_essential in raw_ingredients.items():
             dish.add_ingredient(ingredient_name, is_essential)
         return dish

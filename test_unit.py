@@ -22,13 +22,13 @@ _pkg = importlib.import_module(_PLUGIN_DIR.name)
 _dish_mod = importlib.import_module(".src.dish", _PLUGIN_DIR.name)
 _suggestion_mod = importlib.import_module(".src.suggestion", _PLUGIN_DIR.name)
 _shopping_mod = importlib.import_module(".src.shopping", _PLUGIN_DIR.name)
-_tools_mod = importlib.import_module(".tools", _PLUGIN_DIR.name)
+_handlers_common = importlib.import_module(".src.handlers._common", _PLUGIN_DIR.name)
 
 Dish = _dish_mod.Dish
 calculate_score = _suggestion_mod.calculate_score
 suggest_dishes = _suggestion_mod.suggest_dishes
 suggest_quick_shopping = _shopping_mod.suggest_quick_shopping
-_normalize_ingredients = _tools_mod._normalize_ingredients
+_normalize_ingredients = _handlers_common.normalize_ingredients
 
 # ---------------------------------------------------------------------------
 # Assertion helper (same style as test_integration.py)

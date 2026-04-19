@@ -21,8 +21,8 @@ def calculate_score(dish, available_ingredients, days_since_last,
     if not dish.ingredients:
         return 0
 
-    essentials = [ing for ing, imp in dish.ingredients.items() if imp]
-    optionals = [ing for ing, imp in dish.ingredients.items() if not imp]
+    essentials = [ing for ing, is_essential in dish.ingredients.items() if is_essential]
+    optionals = [ing for ing, is_essential in dish.ingredients.items() if not is_essential]
 
     available_essentials = sum(1 for ing in essentials if ing in available_ingredients)
     available_optionals = sum(1 for ing in optionals if ing in available_ingredients)
@@ -42,7 +42,7 @@ def suggest_dishes(dishes, available_ingredients, days_since_last):
     for dish in dishes:
         if not dish.can_cook_with(available_ingredients):
             continue
-        days = days_since_last.get(dish.name.strip().lower(), RECENCY_CAP_DAYS)
+        days = days_since_last.get(dish.name, RECENCY_CAP_DAYS)
         score = calculate_score(dish, available_ingredients, days)
         if score > 0:
             ranking.append((dish, score))

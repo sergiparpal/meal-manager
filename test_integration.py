@@ -1,7 +1,9 @@
 """Integration smoke test for all 19 meal_manager tools.
 
-Backs up data files before running and restores them afterwards so the test
-is idempotent and never pollutes live data.
+The test creates a throw-away data directory under ``tempfile.gettempdir()``
+and points the repositories + DII session store at it via the package-level
+``configure()`` entry points. The real ``data/`` directory is never touched,
+so the script is safe to run concurrently and never pollutes live state.
 
 Usage:
     python3 test_integration.py
@@ -18,66 +20,52 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Bootstrap: make relative imports work when running standalone.
 # We import the plugin directory as a package so that internal relative
-# imports (e.g. ``from .src.storage import ...``) resolve correctly.
+# imports (e.g. ``from .src.repositories import dish_repo``) resolve correctly.
 # ---------------------------------------------------------------------------
 
 _PLUGIN_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_PLUGIN_DIR.parent))
 _pkg = importlib.import_module(_PLUGIN_DIR.name)
 
+_repos_mod = importlib.import_module(".src.repositories", _PLUGIN_DIR.name)
+_dii_mod = importlib.import_module(".src.dii", _PLUGIN_DIR.name)
+
 # ---------------------------------------------------------------------------
-# Data backup / restore
+# Tmp data directory lifecycle
 # ---------------------------------------------------------------------------
 
-_DATA_DIR = Path(__file__).resolve().parent / "data"
 _DATA_FILES = ["dishes.json", "fridge.json", "history.json"]
-_BACKUP_DIR: Path | None = None
-# Track which data files existed before the test so _restore can delete files
-# that the test created from scratch (otherwise the seed survives forever).
-_PRE_EXISTED: dict[str, bool] = {}
-_SESSIONS_PRE_EXISTED: bool = False
+_TMP_DATA_DIR: Path | None = None
 
 
-def _backup():
-    global _BACKUP_DIR, _SESSIONS_PRE_EXISTED
-    if _BACKUP_DIR is not None and _BACKUP_DIR.exists():
-        shutil.rmtree(_BACKUP_DIR)
-    _BACKUP_DIR = Path(tempfile.mkdtemp(prefix="meal_manager_test_"))
-    for name in _DATA_FILES:
-        src = _DATA_DIR / name
-        _PRE_EXISTED[name] = src.exists()
-        if src.exists():
-            shutil.copy2(src, _BACKUP_DIR / name)
-    sessions = _DATA_DIR / "sessions"
-    _SESSIONS_PRE_EXISTED = sessions.exists()
-    if sessions.exists():
-        shutil.copytree(sessions, _BACKUP_DIR / "sessions")
+def _setup_tmp_data():
+    """Create a tmp data dir, seed it, and point the package at it.
+
+    Called once before any handler runs. ``_repos_mod.configure`` mutates
+    the singleton ``path`` attributes in place, so every handler module
+    that already captured ``dish_repo`` / ``fridge_repo`` / ``history_repo``
+    at import time transparently starts reading/writing here.
+    """
+    global _TMP_DATA_DIR
+    _TMP_DATA_DIR = Path(tempfile.mkdtemp(prefix="meal_manager_test_"))
+    (_TMP_DATA_DIR / "sessions").mkdir(parents=True, exist_ok=True)
+    _repos_mod.configure(_TMP_DATA_DIR)
+    _dii_mod.configure(_TMP_DATA_DIR / "sessions")
+    _seed()
 
 
-def _restore():
-    global _BACKUP_DIR
-    if _BACKUP_DIR is None:
-        return
-    for name in _DATA_FILES:
-        backup = _BACKUP_DIR / name
-        target = _DATA_DIR / name
-        if backup.exists():
-            shutil.copy2(backup, target)
-        elif not _PRE_EXISTED.get(name, False) and target.exists():
-            # Test created this file from scratch — clean it up.
-            target.unlink()
-    sessions = _DATA_DIR / "sessions"
-    backup_sessions = _BACKUP_DIR / "sessions"
-    if sessions.exists():
-        shutil.rmtree(sessions)
-    if backup_sessions.exists():
-        shutil.copytree(backup_sessions, sessions)
-    elif _SESSIONS_PRE_EXISTED:
-        # Backup was missing but the dir existed pre-test — recreate empty.
-        sessions.mkdir(parents=True, exist_ok=True)
-    shutil.rmtree(_BACKUP_DIR)
-    _BACKUP_DIR = None
-    _PRE_EXISTED.clear()
+def _teardown_tmp_data():
+    """Remove the tmp directory entirely — nothing on disk needs restoring."""
+    global _TMP_DATA_DIR
+    if _TMP_DATA_DIR is not None and _TMP_DATA_DIR.exists():
+        shutil.rmtree(_TMP_DATA_DIR)
+    _TMP_DATA_DIR = None
+
+
+# Backwards-compatible aliases so external harnesses (and the AGENTS.md
+# single-test recipe) keep working without edits.
+_backup = _setup_tmp_data
+_restore = _teardown_tmp_data
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +74,9 @@ def _restore():
 
 def _seed():
     """Write known initial state so tests are deterministic."""
-    (_DATA_DIR / "dishes.json").write_text(json.dumps({
+    assert _TMP_DATA_DIR is not None, "_setup_tmp_data must run before _seed"
+
+    (_TMP_DATA_DIR / "dishes.json").write_text(json.dumps({
         "dishes": [
             {
                 "name": "Arroz con Pollo",
@@ -99,19 +89,20 @@ def _seed():
         ]
     }, ensure_ascii=False), encoding="utf-8")
 
-    (_DATA_DIR / "fridge.json").write_text(
+    (_TMP_DATA_DIR / "fridge.json").write_text(
         json.dumps(["arroz", "patatas"], ensure_ascii=False), encoding="utf-8"
     )
 
-    (_DATA_DIR / "history.json").write_text(
+    (_TMP_DATA_DIR / "history.json").write_text(
         json.dumps({"tortilla de patatas": "2026-03-20"}, ensure_ascii=False),
         encoding="utf-8",
     )
 
-    # Clean sessions
-    sessions = _DATA_DIR / "sessions"
+    # Clean sessions on re-seed (single-test helpers may call _seed again).
+    sessions = _TMP_DATA_DIR / "sessions"
     if sessions.exists():
         shutil.rmtree(sessions)
+    sessions.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -143,29 +134,32 @@ def parse(raw: str) -> Any:
 # Import tools (after path setup)
 # ---------------------------------------------------------------------------
 
-_tools = importlib.import_module(".tools", _PLUGIN_DIR.name)
-_history_mod = importlib.import_module(".src.history", _PLUGIN_DIR.name)
-_dii_mod = importlib.import_module(".src.dii", _PLUGIN_DIR.name)
 
-get_meal_suggestions = _tools.get_meal_suggestions
-get_quick_shopping_list = _tools.get_quick_shopping_list
-update_fridge_inventory = _tools.update_fridge_inventory
-register_cooked_meal = _tools.register_cooked_meal
-delete_history_entry = _tools.delete_history_entry
-list_fridge = _tools.list_fridge
-add_dish = _tools.add_dish
-add_dishes_batch = _tools.add_dishes_batch
-delete_dish = _tools.delete_dish
-edit_dish = _tools.edit_dish
-clear_fridge = _tools.clear_fridge
-init_ingredient_session = _tools.init_ingredient_session
-dii_add_suggested = _tools.dii_add_suggested
-dii_skip_suggested = _tools.dii_skip_suggested
-dii_remove_ingredient = _tools.dii_remove_ingredient
-dii_add_manual = _tools.dii_add_manual
-dii_clear_all = _tools.dii_clear_all
-finalize_ingredient_session = _tools.finalize_ingredient_session
-dii_get_state = _tools.dii_get_state
+def _load_handler(module_suffix: str):
+    """Import a handler module and return its HANDLER callable."""
+    mod = importlib.import_module(f".src.handlers.{module_suffix}", _PLUGIN_DIR.name)
+    return mod.HANDLER
+
+
+get_meal_suggestions = _load_handler("get_meal_suggestions")
+get_quick_shopping_list = _load_handler("get_quick_shopping_list")
+update_fridge_inventory = _load_handler("update_fridge_inventory")
+register_cooked_meal = _load_handler("register_cooked_meal")
+delete_history_entry = _load_handler("delete_history_entry")
+list_fridge = _load_handler("list_fridge")
+add_dish = _load_handler("add_dish")
+add_dishes_batch = _load_handler("add_dishes_batch")
+delete_dish = _load_handler("delete_dish")
+edit_dish = _load_handler("edit_dish")
+clear_fridge = _load_handler("clear_fridge")
+init_ingredient_session = _load_handler("init_ingredient_session")
+dii_add_suggested = _load_handler("dii_add_suggested")
+dii_skip_suggested = _load_handler("dii_skip_suggested")
+dii_remove_ingredient = _load_handler("dii_remove_ingredient")
+dii_add_manual = _load_handler("dii_add_manual")
+dii_clear_all = _load_handler("dii_clear_all")
+finalize_ingredient_session = _load_handler("finalize_ingredient_session")
+dii_get_state = _load_handler("dii_get_state")
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -240,24 +234,24 @@ def test_register_cooked_meal():
 def test_register_cooked_meal_bogus():
     print("\n-- register_cooked_meal (nonexistent dish) --")
     result = parse(register_cooked_meal({"dish_name": "Plato Inventado"}))
-    check("returns error", isinstance(result, str) and "error" in result.lower())
+    check("returns error", isinstance(result, dict) and "error" in result, f"got: {result}")
 
 
 def test_register_cooked_meal_rollback():
     print("\n-- register_cooked_meal (rollback) --")
-    before = _history_mod.load_history()
+    before = _repos_mod.history_repo.load()
 
-    original_save_fridge = _tools.save_fridge
+    original_save = _repos_mod.fridge_repo.save
     try:
-        def fail_save_fridge(_fridge):
+        def fail_save(_fridge):
             raise RuntimeError("boom")
 
-        setattr(_tools, "save_fridge", fail_save_fridge)
+        _repos_mod.fridge_repo.save = fail_save
         result = parse(register_cooked_meal({"dish_name": "tortilla de patatas"}))
         check("returns error on fridge failure", isinstance(result, dict) and "error" in result)
-        check("history restored after failure", _history_mod.load_history() == before)
+        check("history restored after failure", _repos_mod.history_repo.load() == before)
     finally:
-        setattr(_tools, "save_fridge", original_save_fridge)
+        _repos_mod.fridge_repo.save = original_save
 
 
 def test_delete_history_entry():
@@ -269,7 +263,7 @@ def test_delete_history_entry():
 def test_delete_history_entry_bogus():
     print("\n-- delete_history_entry (nonexistent) --")
     result = parse(delete_history_entry({"dish_name": "nada"}))
-    check("returns error", isinstance(result, str) and "error" in result.lower())
+    check("returns error", isinstance(result, dict) and "error" in result, f"got: {result}")
 
 
 def test_add_dish_dict():
@@ -296,7 +290,7 @@ def test_add_dish_duplicate():
         "name": "Ensalada",
         "ingredients": {"lechuga": True},
     }))
-    check("returns error for duplicate", isinstance(result, str) and "error" in result.lower())
+    check("returns error for duplicate", isinstance(result, dict) and "error" in result, f"got: {result}")
 
 
 def test_add_dish_invalid_inputs():
@@ -329,7 +323,7 @@ def test_edit_dish_bogus():
         "dish_name": "Plato Fantasma",
         "ingredients": {"agua": True},
     }))
-    check("returns error", isinstance(result, str) and "error" in result.lower())
+    check("returns error", isinstance(result, dict) and "error" in result, f"got: {result}")
 
 
 def test_delete_dish():
@@ -341,7 +335,7 @@ def test_delete_dish():
 def test_delete_dish_bogus():
     print("\n-- delete_dish (nonexistent) --")
     result = parse(delete_dish({"dish_name": "Nada"}))
-    check("returns error", isinstance(result, str) and "error" in result.lower())
+    check("returns error", isinstance(result, dict) and "error" in result, f"got: {result}")
 
 
 def test_add_dishes_batch():
@@ -369,17 +363,17 @@ def test_dii_finalize_rollback():
     }))
     sid = state["session_id"]
 
-    original_save_dishes = _dii_mod.save_dishes
+    original_save = _repos_mod.dish_repo.save
     try:
-        def fail_save_dishes(_dishes):
+        def fail_save(_dishes):
             raise RuntimeError("boom")
 
-        setattr(_dii_mod, "save_dishes", fail_save_dishes)
+        _repos_mod.dish_repo.save = fail_save
         result = parse(finalize_ingredient_session({"session_id": sid}))
         check("returns error on dish failure", isinstance(result, dict) and "error" in result)
         check("fridge rolled back after failure", parse(list_fridge({})) == fridge_before)
     finally:
-        setattr(_dii_mod, "save_dishes", original_save_dishes)
+        _repos_mod.dish_repo.save = original_save
         parse(finalize_ingredient_session({
             "session_id": sid,
             "commit_to_fridge": False,
@@ -590,10 +584,8 @@ def test_dii_add_manual_empty():
 # ---------------------------------------------------------------------------
 
 def main():
-    _backup()
+    _setup_tmp_data()
     try:
-        _seed()
-
         test_list_fridge()
         test_update_fridge_add()
         test_update_fridge_add_duplicate()
@@ -628,7 +620,7 @@ def main():
         test_dii_add_manual_empty()
 
     finally:
-        _restore()
+        _teardown_tmp_data()
 
     print(f"\n{'='*40}")
     print(f"  {_passed} passed, {_failed} failed")

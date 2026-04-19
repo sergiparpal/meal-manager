@@ -15,7 +15,7 @@ def suggest_quick_shopping(dishes, available_ingredients, days_since_last):
 
         missing_ingredient = missing_essentials[0]
         simulated_ingredients = available_ingredients | {missing_ingredient}
-        days = days_since_last.get(dish.name.strip().lower(), 14)
+        days = days_since_last.get(dish.name, 14)
         score = calculate_score(dish, simulated_ingredients, days)
 
         if score <= 0:
