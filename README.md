@@ -202,27 +202,27 @@ meal-manager/
 │   ├── suggestion.py          # Scoring engine — ranks dishes by availability + recency
 │   ├── shopping.py            # Shopping suggestions — single-ingredient unlock logic
 │   ├── handlers/              # One module per registered tool (NAME, SCHEMA, HANDLER)
-│   │   ├── __init__.py        # iter_tools() walks the package and yields each triple
-│   │   ├── _common.py         # Shared helpers (err, normalization, input limits)
-│   │   ├── get_meal_suggestions.py
-│   │   ├── get_quick_shopping_list.py
-│   │   ├── update_fridge_inventory.py
-│   │   ├── register_cooked_meal.py
-│   │   ├── delete_history_entry.py
-│   │   ├── list_fridge.py
-│   │   ├── add_dish.py
-│   │   ├── add_dishes_batch.py
-│   │   ├── delete_dish.py
-│   │   ├── edit_dish.py
-│   │   ├── clear_fridge.py
-│   │   ├── init_ingredient_session.py
-│   │   ├── dii_add_suggested.py
-│   │   ├── dii_skip_suggested.py
-│   │   ├── dii_remove_ingredient.py
-│   │   ├── dii_add_manual.py
-│   │   ├── dii_clear_all.py
-│   │   ├── dii_get_state.py
-│   │   └── finalize_ingredient_session.py
+│   │   ├── __init__.py                     # iter_tools() walks the package and yields each triple
+│   │   ├── _common.py                      # Shared helpers (err, normalization, input limits)
+│   │   ├── get_meal_suggestions.py         # Rank cookable dishes by availability and recency
+│   │   ├── get_quick_shopping_list.py      # Single-ingredient purchases that unlock new dishes
+│   │   ├── update_fridge_inventory.py      # Add or remove ingredients from the fridge
+│   │   ├── register_cooked_meal.py         # Log a dish as cooked and auto-remove essentials
+│   │   ├── delete_history_entry.py         # Undo a cooked-meal entry from history
+│   │   ├── list_fridge.py                  # Return the current fridge contents
+│   │   ├── add_dish.py                     # Add a new recipe to the catalog
+│   │   ├── add_dishes_batch.py             # Add multiple recipes in a single call
+│   │   ├── delete_dish.py                  # Remove a recipe from the catalog
+│   │   ├── edit_dish.py                    # Replace the ingredient list of an existing recipe
+│   │   ├── clear_fridge.py                 # Empty the fridge inventory
+│   │   ├── init_ingredient_session.py      # Start a DII session with ranked suggestions
+│   │   ├── dii_add_suggested.py            # Accept the current DII suggestion and reveal the next
+│   │   ├── dii_skip_suggested.py           # Skip the current DII suggestion and reveal the next
+│   │   ├── dii_remove_ingredient.py        # Remove a DII ingredient (flags recalc if essential)
+│   │   ├── dii_add_manual.py               # Add a user-typed ingredient to the DII session
+│   │   ├── dii_clear_all.py                # Clear all selected ingredients in the DII session
+│   │   ├── dii_get_state.py                # Read-only DII session state query
+│   │   └── finalize_ingredient_session.py  # Commit the DII session to fridge and/or dish catalog
 │   ├── repositories/          # Persistence layer behind Protocol seams
 │   │   ├── __init__.py        # Singletons + configure(data_dir)
 │   │   ├── base.py            # DishRepository / FridgeRepository / HistoryRepository
@@ -249,7 +249,7 @@ meal-manager/
 ├── AGENTS.md                  # Repository guidance for agentic coding work
 ├── CLAUDE.md                  # Development guidelines for Claude Code
 ├── LICENSE                    # GPLv3 license text
-└── README.md
+└── README.md                  # This file — project overview and usage guide
 ```
 
 ### Data Format Reference
