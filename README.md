@@ -194,7 +194,7 @@ For the fastest feedback on pure domain logic, run `python3 test_unit.py`. It co
 
 ## Project Structure
 
-![Functional Diagram of the plugin](Diagram.png)
+![Functional Diagram of the plugin](diagram.png)
 
 ```
 meal-manager/
