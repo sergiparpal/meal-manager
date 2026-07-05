@@ -1,6 +1,7 @@
 """Tool: get_quick_shopping_list — single-ingredient unlocks."""
 
-from ..repositories import dish_repo, fridge_repo
+from .. import tuning
+from ..repositories import dish_repo, fridge_repo, tuning_repo
 from ..shopping import suggest_quick_shopping
 from ._common import days_since_last_cook, tool_handler
 
@@ -25,7 +26,9 @@ def HANDLER(args: dict, **kwargs):
     fridge = fridge_repo.load_set()
     days = days_since_last_cook()
 
-    shopping = suggest_quick_shopping(dishes, fridge, days)
+    match_weight, time_weight = tuning.deployed_weights(tuning_repo.load())
+    shopping = suggest_quick_shopping(dishes, fridge, days,
+                                      match_weight=match_weight, time_weight=time_weight)
     return [
         {
             "missing_ingredient": ingredient,

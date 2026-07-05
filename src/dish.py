@@ -16,6 +16,14 @@ class Dish:
 
     def __post_init__(self):
         self.name = self.normalize_name(self.name)
+        # Enforce the same normalization invariant on ingredient keys for every
+        # construction path (direct, dataclasses.replace, …), so consumers can
+        # compare against the always-lowercased fridge without re-normalizing.
+        if self.ingredients:
+            self.ingredients = {
+                self.normalize_ingredient(key): value
+                for key, value in self.ingredients.items()
+            }
 
     @staticmethod
     def _clean(value, *, label):

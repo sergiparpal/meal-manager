@@ -1,7 +1,7 @@
 """Tool: dii_remove_ingredient — drop a selected ingredient from a session."""
 
 from ..dii import remove_ingredient
-from ._common import tool_handler
+from ._common import require_arg, tool_handler
 
 NAME = "dii_remove_ingredient"
 
@@ -29,4 +29,4 @@ SCHEMA = {
 
 @tool_handler(NAME)
 def HANDLER(args: dict, **kwargs):
-    return remove_ingredient(args["session_id"], args["ingredient"])
+    return remove_ingredient(require_arg(args, "session_id"), require_arg(args, "ingredient"))

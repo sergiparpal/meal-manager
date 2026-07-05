@@ -15,7 +15,7 @@ that need a different location (tests pointing at a tmp path, or a host
 placing plugin data elsewhere) invoke :func:`configure` to redirect the
 singletons. ``configure`` mutates the existing singletons in place so any
 module that already imported ``dish_repo`` / ``fridge_repo`` / ``history_repo``
-keeps a valid reference.
+/ ``tuning_repo`` keeps a valid reference.
 """
 
 from pathlib import Path
@@ -49,10 +49,10 @@ tuning_repo: TuningRepository = JsonTuningRepository(_DEFAULT_DATA_DIR / "tuning
 def configure(data_dir) -> None:
     """Redirect the default repositories at ``data_dir``.
 
-    Mutates ``dish_repo.path``, ``fridge_repo.path`` and ``history_repo.path``
-    in place so consumers that already captured the singleton bindings
-    (handlers under ``src/handlers/`` all do) continue to work without a
-    reload. Typical callers:
+    Mutates ``dish_repo.path``, ``fridge_repo.path``, ``history_repo.path`` and
+    ``tuning_repo.path`` in place so consumers that already captured the
+    singleton bindings (handlers under ``src/handlers/`` all do) continue to
+    work without a reload. Typical callers:
 
     * the top-level ``register(ctx, data_dir=…)`` when a Hermes host wants
       the plugin to read/write under a custom location;

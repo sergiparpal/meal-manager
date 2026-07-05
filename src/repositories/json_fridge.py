@@ -1,10 +1,13 @@
 """JSON-file-backed implementation of FridgeRepository."""
 
 import json
+import logging
 import threading
 from pathlib import Path
 
 from .. import atomic_write_json
+
+logger = logging.getLogger(__name__)
 
 
 class JsonFridgeRepository:
@@ -15,15 +18,26 @@ class JsonFridgeRepository:
         self.lock = threading.Lock()
 
     def load(self) -> list[str]:
-        """Load the inventory. Returns ``[]`` for missing or invalid files."""
+        """Load the inventory. Returns ``[]`` for missing or invalid files.
+
+        A corrupt or wrong-shaped file is logged (rather than being handled
+        silently) so an unreadable inventory that a subsequent save would
+        overwrite does not go unnoticed.
+        """
         if not self.path.exists():
             return []
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning("Failed to load %s: %s", self.path.name, exc)
             return []
         if not isinstance(data, list):
+            logger.warning(
+                "Ignoring %s with unexpected top-level type: %s",
+                self.path.name,
+                type(data).__name__,
+            )
             return []
         items = [ing.strip().lower() for ing in data if isinstance(ing, str)]
         return list(dict.fromkeys(items))

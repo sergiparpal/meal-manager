@@ -5,7 +5,12 @@ from datetime import date
 
 from .. import tuning
 from ..repositories import dish_repo, fridge_repo, history_repo, tuning_repo
-from ._common import days_since_last_cook, normalize_dish_name, tool_handler
+from ._common import (
+    days_since_last_cook,
+    normalize_dish_name,
+    require_arg,
+    tool_handler,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +36,7 @@ SCHEMA = {
 
 @tool_handler(NAME)
 def HANDLER(args: dict, **kwargs):
-    raw_name = args["dish_name"]
+    raw_name = require_arg(args, "dish_name")
     name = normalize_dish_name(raw_name)
 
     with dish_repo.lock:

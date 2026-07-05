@@ -3,7 +3,7 @@
 import logging
 
 from ..repositories import dish_repo, history_repo
-from ._common import normalize_dish_name, tool_handler
+from ._common import normalize_dish_name, require_arg, tool_handler
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ SCHEMA = {
 
 @tool_handler(NAME)
 def HANDLER(args: dict, **kwargs):
-    raw_name = args["dish_name"]
+    raw_name = require_arg(args, "dish_name")
     name = normalize_dish_name(raw_name)
 
     with dish_repo.lock:

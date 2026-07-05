@@ -516,12 +516,15 @@ def test_dii_finalize_twice():
     }))
     sid = state["session_id"]
 
-    parse(finalize_ingredient_session({"session_id": sid}))
-    # After H1 fix, finalized sessions are cleaned up from memory and disk,
-    # so a second finalize correctly reports "session not found".
+    first = parse(finalize_ingredient_session({"session_id": sid}))
+    check("first finalize commits", first["finalized"] is True, f"got: {first}")
+    # Finalized sessions are retained (persisted) so a repeat finalize is
+    # idempotent: it must report the "already finalized" warning rather than a
+    # misleading "not found", and must not commit a second time.
     state2 = parse(finalize_ingredient_session({"session_id": sid}))
-    check("second finalize returns session-not-found error",
-          "error" in state2 and "not found" in state2["error"].lower(),
+    check("second finalize is idempotent with a warning",
+          "warning" in state2 and "finalized" in state2["warning"].lower()
+          and state2.get("finalized") is True,
           f"got: {state2}")
 
 
@@ -624,6 +627,162 @@ def test_online_weight_tuning():
 
 
 # ---------------------------------------------------------------------------
+# Regression tests for the review fixes
+# ---------------------------------------------------------------------------
+
+def test_missing_required_arg_message():
+    print("\n-- validation: missing required arg yields a clear message --")
+    res = parse(add_dish({"name": "No Ingredients"}))
+    check("missing 'ingredients' reported clearly",
+          "error" in res and "ingredients" in res["error"]
+          and "required" in res["error"].lower(), f"got: {res}")
+    res2 = parse(register_cooked_meal({}))
+    check("missing 'dish_name' reported clearly",
+          "error" in res2 and "dish_name" in res2["error"]
+          and "required" in res2["error"].lower(), f"got: {res2}")
+
+
+def test_add_dishes_batch_partial_failure():
+    print("\n-- add_dishes_batch: partial failure keeps valid dishes --")
+    res = parse(add_dishes_batch({"dishes": [
+        {"name": "Valid One", "ingredients": {"a": True}},
+        {"name": "Bad One", "ingredients": {"b": "nope"}},  # non-bool -> fails
+        {"name": "Valid Two", "ingredients": ["c"]},
+    ]}))
+    check("valid dishes added despite a bad entry",
+          set(res.get("added", [])) == {"valid one", "valid two"}, f"got: {res}")
+    check("bad entry surfaced in 'failed'",
+          any(f.get("name") == "Bad One" for f in res.get("failed", [])), f"got: {res}")
+
+
+def test_dii_remove_optional_no_recalc():
+    print("\n-- DII: removing an optional does not trigger recalculation --")
+    state = parse(init_ingredient_session({
+        "dish_name": "Opt Test",
+        "ingredients": ["ess1", "opt1"],
+        "is_essential": [True, False],
+        "pre_select_top_n": 2,
+    }))
+    sid = state["session_id"]
+    check("optional pre-selected", "opt1" in state["optional_ingredients"])
+    res = parse(dii_remove_ingredient({"session_id": sid, "ingredient": "opt1"}))
+    check("optional removed", "opt1" not in res["optional_ingredients"])
+    check("no recalculation for optional removal",
+          res["recalculation_needed"] is False, f"got: {res}")
+    check("no pending recalculation", res["pending_recalculation"] is False, f"got: {res}")
+    res2 = parse(dii_remove_ingredient({"session_id": sid, "ingredient": "ess1"}))
+    check("recalculation for essential removal",
+          res2["recalculation_needed"] is True, f"got: {res2}")
+
+
+def test_edit_dish_empty_rejected():
+    print("\n-- edit_dish: empty ingredient set rejected (no silent wipe) --")
+    add_dish({"name": "Guardable", "ingredients": {"x": True, "y": False}})
+    res = parse(edit_dish({"dish_name": "Guardable", "ingredients": []}))
+    check("empty edit returns an error", "error" in res, f"got: {res}")
+    guard = next((d for d in _repos_mod.dish_repo.load() if d.name == "guardable"), None)
+    check("recipe not wiped by empty edit",
+          guard is not None and len(guard.ingredients) == 2,
+          f"got: {guard and guard.ingredients}")
+
+
+def test_dii_finalize_empty_selection_no_wipe():
+    print("\n-- DII: finalize with empty selection does not wipe a recipe --")
+    add_dish({"name": "Precious", "ingredients": {"p": True, "q": False}})
+    state = parse(init_ingredient_session({
+        "dish_name": "Precious",
+        "ingredients": ["p"],
+        "is_essential": [True],
+        "pre_select_top_n": 0,  # nothing selected
+    }))
+    sid = state["session_id"]
+    res = parse(finalize_ingredient_session({"session_id": sid}))
+    check("empty finalize did not commit the dish",
+          res.get("committed_to_dish") is False, f"got: {res}")
+    check("empty finalize surfaces a warning", "warning" in res, f"got: {res}")
+    precious = next((d for d in _repos_mod.dish_repo.load() if d.name == "precious"), None)
+    check("recipe preserved after empty finalize",
+          precious is not None and len(precious.ingredients) == 2,
+          f"got: {precious and precious.ingredients}")
+
+
+def test_dii_store_ttl_and_recovery():
+    print("\n-- DII store: TTL expiry, crash recovery, traversal guard --")
+    store_mod = importlib.import_module(".src.dii.store", _PLUGIN_DIR.name)
+    session_mod = importlib.import_module(".src.dii.session", _PLUGIN_DIR.name)
+    tmp = Path(tempfile.mkdtemp(prefix="store_ttl_"))
+    try:
+        store = store_mod.IngredientSessionStore(session_dir=tmp)
+        fresh = session_mod.DIISession(
+            session_id="alpha", dish_name="d",
+            created_at=session_mod.now_iso(), last_activity=session_mod.now_iso())
+        store.put(fresh)
+        # (a) crash recovery: a brand-new store rehydrates from the backup file.
+        reloaded = store_mod.IngredientSessionStore(session_dir=tmp).get("alpha")
+        check("crash-recovery reloads a live session", reloaded is not None)
+        # (b) expired session is purged from memory and disk.
+        old = "2000-01-01T00:00:00+00:00"
+        stale = session_mod.DIISession(
+            session_id="beta", dish_name="d", created_at=old, last_activity=old)
+        store.put(stale)
+        check("expired session not served", store.get("beta") is None)
+        check("expired backup deleted", not (tmp / "beta.json").exists())
+        # (c) path-traversal id rejected before any filesystem access.
+        try:
+            store.get("../../etc/passwd")
+            check("traversal id rejected", False, "should have raised ValueError")
+        except ValueError:
+            check("traversal id rejected", True)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_dii_session_id_traversal_rejected():
+    print("\n-- security: session_id path traversal cannot touch other files --")
+    (_TMP_DATA_DIR / "dishes.json").write_text(
+        json.dumps({"dishes": [{"name": "safe", "ingredients": {"a": True}}]}),
+        encoding="utf-8")
+    res = parse(dii_get_state({"session_id": "../dishes"}))
+    check("traversing session_id returns an error", "error" in res, f"got: {res}")
+    check("catalog file untouched by traversal read",
+          (_TMP_DATA_DIR / "dishes.json").exists())
+    res2 = parse(init_ingredient_session({
+        "dish_name": "x", "ingredients": ["a"], "is_essential": [True],
+        "session_id": "../evil",
+    }))
+    check("traversing session_id on init rejected", "error" in res2, f"got: {res2}")
+    check("no file written outside sessions/",
+          not (_TMP_DATA_DIR / "evil.json").exists())
+
+
+def test_dish_load_preserves_malformed():
+    print("\n-- data integrity: unparseable dish entry preserved across writes --")
+    (_TMP_DATA_DIR / "dishes.json").write_text(json.dumps({"dishes": [
+        {"name": "keeper", "ingredients": {"a": True}},
+        {"name": "victim", "ingredients": {"b": True}},
+        {"name": "legacy", "ingredients": {"c": "yes"}},  # non-bool -> unparseable
+    ]}), encoding="utf-8")
+    res = parse(delete_dish({"dish_name": "victim"}))
+    check("deleted the targeted dish",
+          isinstance(res, str) and "deleted" in res.lower(), f"got: {res}")
+    raw = json.loads((_TMP_DATA_DIR / "dishes.json").read_text())
+    names = [d["name"] for d in raw["dishes"]]
+    check("unrelated unparseable entry preserved", "legacy" in names, f"got: {names}")
+    check("valid untargeted dish preserved", "keeper" in names, f"got: {names}")
+    check("targeted dish removed", "victim" not in names, f"got: {names}")
+
+    # Adding a valid dish whose name collides with the preserved malformed row
+    # must NOT create a permanent duplicate-named ghost: the malformed twin is
+    # dropped in favour of the live dish.
+    add_dish({"name": "legacy", "ingredients": {"real": True}})
+    raw2 = json.loads((_TMP_DATA_DIR / "dishes.json").read_text())
+    legacy_rows = [d for d in raw2["dishes"] if d.get("name") == "legacy"]
+    check("no duplicate-named ghost after re-adding the name",
+          len(legacy_rows) == 1 and legacy_rows[0]["ingredients"] == {"real": True},
+          f"got: {legacy_rows}")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -663,9 +822,23 @@ def main():
         test_dii_get_state()
         test_dii_add_manual_empty()
 
-        # Online weight tuning (self-contained; runs last so it cannot perturb
+        # Regression tests for the review fixes. The state-preserving ones run
+        # first; the two that overwrite dishes.json wholesale run last so they
+        # cannot perturb the catalog the earlier assertions depend on.
+        test_missing_required_arg_message()
+        test_add_dishes_batch_partial_failure()
+        test_dii_remove_optional_no_recalc()
+        test_edit_dish_empty_rejected()
+        test_dii_finalize_empty_selection_no_wipe()
+        test_dii_store_ttl_and_recovery()
+
+        # Online weight tuning (self-contained; runs late so it cannot perturb
         # the fridge/catalog state the earlier assertions depend on).
         test_online_weight_tuning()
+
+        # These overwrite dishes.json wholesale — keep them last.
+        test_dii_session_id_traversal_rejected()
+        test_dish_load_preserves_malformed()
 
     finally:
         _teardown_tmp_data()

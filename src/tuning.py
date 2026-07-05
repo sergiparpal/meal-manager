@@ -87,11 +87,6 @@ def initialize_state() -> dict:
     }
 
 
-def default_state() -> dict:
-    """Fallback for missing/corrupt files — a fresh initialized state."""
-    return initialize_state()
-
-
 def validate_state(raw) -> dict:
     """Return *raw* if it has the expected shape and candidate set.
 
@@ -151,6 +146,7 @@ def compute_rewards(cooked_name, dishes, fridge_set, days_map, candidates):
         return None
 
     rewards: dict[str, float] = {}
+    found_any = False
     for w in candidates:
         ranking = suggest_dishes(cookable, fridge_set, days_map,
                                  match_weight=w, time_weight=1 - w)
@@ -158,8 +154,15 @@ def compute_rewards(cooked_name, dishes, fridge_set, days_map, candidates):
         for index, (dish, _score) in enumerate(ranking):
             if dish.name == cooked_name:
                 pos = index + 1
+                found_any = True
                 break
         rewards[_key(w)] = (N - pos) / (N - 1)
+    # If the cooked dish scored 0 for *every* candidate it was dropped from all
+    # rankings (cooldown gate or empty-ingredient dish — both weight-independent).
+    # That carries no discriminating signal, so skip the event like N<2 rather
+    # than feeding a uniform all-zero reward that only discounts accumulated mass.
+    if not found_any:
+        return None
     return rewards
 
 
@@ -185,6 +188,9 @@ def select_deployed(state: dict) -> dict:
     warm, switch to the best-mean candidate within ``BAND`` only if it beats
     the current deployed candidate by more than ``HYSTERESIS_MARGIN``.
     """
+    # Copy before mutating so we honour the module's pure-function contract
+    # (a caller passing a snapshot must not see its deployed_* fields change).
+    state = dict(state)
     observations = state.get("observations", 0)
     candidates = state.get("candidates", list(CANDIDATES))
 
@@ -208,11 +214,19 @@ def select_deployed(state: dict) -> dict:
 
 
 def deployed_weights(state) -> tuple[float, float]:
-    """Safe reader: ``(match_weight, time_weight)`` from *state*, falling back
-    to the prior blend if the fields are missing or unreadable."""
+    """Safe reader: ``(match_weight, time_weight)`` from *state*.
+
+    Falls back to the prior blend if the match weight is missing or unreadable,
+    and otherwise clamps it to ``BAND`` and re-derives ``time_weight = 1 - mw``.
+    This guarantees the returned blend is always in-band and normalized even if
+    the on-disk file was hand-edited, written by another version, or left with a
+    non-summing pair (``validate_state`` does not police the deployed fields).
+    """
     try:
         mw = float(state["deployed_match_weight"])
-        tw = float(state["deployed_time_weight"])
     except (KeyError, TypeError, ValueError):
         return (PRIOR_W, round(1 - PRIOR_W, 4))
-    return (mw, tw)
+    if mw != mw:  # NaN
+        return (PRIOR_W, round(1 - PRIOR_W, 4))
+    mw = _clamp_to_band(mw)
+    return (mw, round(1 - mw, 4))

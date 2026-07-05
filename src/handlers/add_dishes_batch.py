@@ -6,6 +6,7 @@ from ._common import (
     MAX_BATCH_SIZE,
     normalize_dish_name,
     normalize_ingredients,
+    require_arg,
     tool_handler,
 )
 
@@ -58,7 +59,7 @@ SCHEMA = {
 
 @tool_handler(NAME)
 def HANDLER(args: dict, **kwargs):
-    dishes_input = args["dishes"]
+    dishes_input = require_arg(args, "dishes")
     if not isinstance(dishes_input, list):
         raise ValueError("dishes must be an array")
     if len(dishes_input) > MAX_BATCH_SIZE:
@@ -70,22 +71,29 @@ def HANDLER(args: dict, **kwargs):
 
         added = []
         skipped = []
+        failed = []
         for entry in dishes_input:
-            if not isinstance(entry, dict):
-                raise ValueError("each dish must be an object")
-            name = normalize_dish_name(entry["name"])
-            if name in existing:
-                skipped.append(name)
-                continue
-            ingredients = normalize_ingredients(entry["ingredients"])
-            new_dish = Dish(name=name)
-            for ing, essential in ingredients.items():
-                new_dish.add_ingredient(ing, essential)
-            dishes.append(new_dish)
-            existing.add(name)
-            added.append(name)
+            # A single malformed entry must not discard the whole batch:
+            # record it and keep going so valid dishes still commit.
+            try:
+                if not isinstance(entry, dict):
+                    raise ValueError("each dish must be an object")
+                name = normalize_dish_name(require_arg(entry, "name"))
+                if name in existing:
+                    skipped.append(name)
+                    continue
+                ingredients = normalize_ingredients(require_arg(entry, "ingredients"))
+                new_dish = Dish(name=name)
+                for ing, essential in ingredients.items():
+                    new_dish.add_ingredient(ing, essential)
+                dishes.append(new_dish)
+                existing.add(name)
+                added.append(name)
+            except ValueError as exc:
+                entry_name = entry.get("name") if isinstance(entry, dict) else None
+                failed.append({"name": entry_name, "error": str(exc)})
 
         if added:
             dish_repo.save(dishes)
 
-    return {"added": added, "skipped": skipped}
+    return {"added": added, "skipped": skipped, "failed": failed}

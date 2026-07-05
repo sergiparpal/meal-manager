@@ -4,6 +4,7 @@ from ..repositories import fridge_repo
 from ._common import (
     MAX_FRIDGE_UPDATE,
     normalize_ingredient_name,
+    require_arg,
     tool_handler,
 )
 
@@ -34,8 +35,8 @@ SCHEMA = {
 
 @tool_handler(NAME)
 def HANDLER(args: dict, **kwargs):
-    action = args["action"]
-    raw_items = args["ingredients"]
+    action = require_arg(args, "action")
+    raw_items = require_arg(args, "ingredients")
 
     if action not in ("add", "remove"):
         raise ValueError(f"action must be 'add' or 'remove', got '{action}'")

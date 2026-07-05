@@ -27,12 +27,21 @@ def commit(
     the fridge — never clobbers concurrent writers.
     """
     all_ingredients = session.essential_ingredients + session.optional_ingredients
+    ingredient_map: dict[str, bool] = (
+        {ing: True for ing in session.essential_ingredients}
+        | {ing: False for ing in session.optional_ingredients}
+    )
     committed_fridge = False
     committed_dish = False
-    added_to_fridge: list[str] = []
 
-    if commit_to_fridge and all_ingredients:
-        with fridge_repo.lock:
+    # Hold the fridge lock across the entire commit so that, on a dish-write
+    # failure, the rollback undoes exactly this call's additions with no
+    # concurrent fridge writer able to interleave (which a release-then-remove
+    # rollback could otherwise clobber). No path acquires dish-before-fridge, so
+    # nesting the dish lock inside the fridge lock introduces no lock cycle.
+    with fridge_repo.lock:
+        added_to_fridge: list[str] = []
+        if commit_to_fridge and all_ingredients:
             fridge = fridge_repo.load()
             added_to_fridge = [ing for ing in all_ingredients if ing not in fridge]
             if added_to_fridge:
@@ -40,34 +49,34 @@ def commit(
                 fridge_repo.save(fridge)
             committed_fridge = bool(added_to_fridge)
 
-    try:
-        if commit_to_dish:
-            with dish_repo.lock:
-                dishes = dish_repo.load()
-                ingredient_map: dict[str, bool] = (
-                    {ing: True for ing in session.essential_ingredients}
-                    | {ing: False for ing in session.optional_ingredients}
-                )
-
-                existing = next(
-                    (d for d in dishes if d.name == session.dish_name),
-                    None,
-                )
-                if existing is not None:
-                    existing.ingredients = ingredient_map
-                else:
-                    new_dish = Dish(name=session.dish_name)
-                    for ing, essential in ingredient_map.items():
-                        new_dish.add_ingredient(ing, essential)
-                    dishes.append(new_dish)
-                dish_repo.save(dishes)
-                committed_dish = True
-    except Exception:
-        if added_to_fridge:
-            try:
-                fridge_repo.remove_items(added_to_fridge)
-            except Exception:
-                logger.exception("finalize_session fridge rollback failed")
-        raise
+        try:
+            # An empty selection would wipe an existing recipe to zero
+            # ingredients (or create a meaningless empty dish), so never write
+            # the catalog unless there is at least one ingredient to commit.
+            if commit_to_dish and ingredient_map:
+                with dish_repo.lock:
+                    dishes = dish_repo.load()
+                    existing = next(
+                        (d for d in dishes if d.name == session.dish_name),
+                        None,
+                    )
+                    if existing is not None:
+                        existing.ingredients = ingredient_map
+                    else:
+                        new_dish = Dish(name=session.dish_name)
+                        for ing, essential in ingredient_map.items():
+                            new_dish.add_ingredient(ing, essential)
+                        dishes.append(new_dish)
+                    dish_repo.save(dishes)
+                    committed_dish = True
+        except Exception:
+            if added_to_fridge:
+                try:
+                    remove = set(added_to_fridge)
+                    fridge = fridge_repo.load()
+                    fridge_repo.save([ing for ing in fridge if ing not in remove])
+                except Exception:
+                    logger.exception("finalize_session fridge rollback failed")
+            raise
 
     return committed_fridge, committed_dish

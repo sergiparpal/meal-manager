@@ -2,7 +2,12 @@
 
 from ..dish import Dish
 from ..repositories import dish_repo
-from ._common import normalize_dish_name, normalize_ingredients, tool_handler
+from ._common import (
+    normalize_dish_name,
+    normalize_ingredients,
+    require_arg,
+    tool_handler,
+)
 
 NAME = "add_dish"
 
@@ -44,8 +49,8 @@ SCHEMA = {
 
 @tool_handler(NAME)
 def HANDLER(args: dict, **kwargs):
-    ingredients = normalize_ingredients(args["ingredients"])
-    name = normalize_dish_name(args["name"])
+    ingredients = normalize_ingredients(require_arg(args, "ingredients"))
+    name = normalize_dish_name(require_arg(args, "name"))
 
     with dish_repo.lock:
         dishes = dish_repo.load()

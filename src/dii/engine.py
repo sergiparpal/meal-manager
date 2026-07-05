@@ -121,14 +121,14 @@ def _normalize_ranked_item(item: object) -> dict:
     name = Dish.normalize_ingredient(item_dict["ingredient"])
     if not name:
         raise ValueError("ingredient name cannot be empty")
-    item_dict["ingredient"] = name
 
     is_essential = item_dict.get("is_essential", True)
     if not isinstance(is_essential, bool):
         raise ValueError("is_essential must be a boolean")
-    item_dict["is_essential"] = is_essential
 
-    return item_dict
+    # Return a fresh dict so caller-owned input is never mutated and the
+    # session's internal state does not alias objects the caller still holds.
+    return {**item_dict, "ingredient": name, "is_essential": is_essential}
 
 
 def _apply_pre_selection(session: DIISession, pre_selected: list[dict]) -> None:
@@ -212,11 +212,20 @@ def add_manual(
     return True, None
 
 
-def clear_all(session: DIISession) -> None:
+def clear_all(session: DIISession) -> bool:
+    """Clear both selected lists. Returns whether anything was actually removed.
+
+    Only flags recalculation when something was cleared — clearing an already
+    empty selection must not strand a still-populated suggestion funnel behind
+    the ``pending_recalculation`` gate.
+    """
+    had_selection = bool(session.essential_ingredients or session.optional_ingredients)
     session.essential_ingredients.clear()
     session.optional_ingredients.clear()
-    session.pending_recalculation = True
+    if had_selection:
+        session.pending_recalculation = True
     _touch(session)
+    return had_selection
 
 
 def mark_finalized(session: DIISession) -> None:

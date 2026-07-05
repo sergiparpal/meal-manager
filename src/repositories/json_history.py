@@ -2,6 +2,7 @@
 
 import json
 import threading
+from datetime import date
 from pathlib import Path
 
 from .. import atomic_write_json
@@ -34,8 +35,17 @@ class JsonHistoryRepository:
             if not isinstance(name, str) or not isinstance(date_str, str):
                 continue
             key = name.strip().lower()
-            if key not in normalized or date_str > normalized[key]:
+            if key not in normalized:
                 normalized[key] = date_str
+                continue
+            # Compare as actual dates, not lexicographically: raw string order
+            # is wrong for non-zero-padded values (e.g. '2026-7-9' vs
+            # '2026-12-09'). On any parse ambiguity, keep the existing value.
+            try:
+                if date.fromisoformat(date_str) > date.fromisoformat(normalized[key]):
+                    normalized[key] = date_str
+            except ValueError:
+                continue
         return normalized
 
     def set_entry(self, dish_name: str, date_str: str) -> str | None:

@@ -13,7 +13,7 @@ from . import engine
 from .finalizer import commit as _commit
 from .presenter import to_response as _to_response
 from .session import DIISession
-from .store import IngredientSessionStore
+from .store import IngredientSessionStore, validate_session_id
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +66,6 @@ def _require_active_session(session_id: str) -> DIISession:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-
-
-def get_session(session_id: str) -> DIISession | None:
-    """Retrieve a session from memory or disk. Returns None if missing/expired."""
-    return _store.get(session_id)
 
 
 def create_session(
@@ -162,9 +157,9 @@ def clear_all_ingredients(session_id: str) -> dict:
     _require_session(session_id)
     with _store.get_lock(session_id):
         session = _require_session(session_id)
-        engine.clear_all(session)
+        cleared = engine.clear_all(session)
         _store.persist(session)
-        return _to_response(session, recalculation_needed=True)
+        return _to_response(session, recalculation_needed=cleared)
 
 
 def finalize_session(
@@ -191,6 +186,10 @@ def finalize_session(
             resp["warning"] = "Session was already finalized"
             return resp
 
+        has_selection = bool(
+            session.essential_ingredients or session.optional_ingredients
+        )
+
         committed_fridge, committed_dish = _commit(
             session,
             commit_to_fridge=commit_to_fridge,
@@ -204,11 +203,19 @@ def finalize_session(
         resp = _to_response(session)
         resp["committed_to_fridge"] = committed_fridge
         resp["committed_to_dish"] = committed_dish
+        if commit_to_dish and not committed_dish and not has_selection:
+            resp["warning"] = (
+                "No ingredients were selected; the dish catalog was not modified."
+            )
 
-        # Clean up: remove from memory and disk to prevent unbounded growth.
+        # Persist the finalized flag rather than deleting the session, so a
+        # repeat finalize hits the idempotency guard above (and reports the
+        # "already finalized" warning) instead of a misleading "not found",
+        # and a crash-recovery reload cannot re-commit. TTL cleanup reclaims
+        # the inert finalized session in the background.
         try:
-            _store.remove(session_id)
+            _store.persist(session)
         except Exception:
-            logger.exception("finalize_session cleanup failed")
+            logger.exception("finalize_session persist failed")
 
         return resp

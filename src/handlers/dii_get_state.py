@@ -1,7 +1,7 @@
 """Tool: dii_get_state — read DII session state without mutating it."""
 
 from ..dii import get_session_state
-from ._common import tool_handler
+from ._common import require_arg, tool_handler
 
 NAME = "dii_get_state"
 
@@ -24,4 +24,4 @@ SCHEMA = {
 
 @tool_handler(NAME)
 def HANDLER(args: dict, **kwargs):
-    return get_session_state(args["session_id"])
+    return get_session_state(require_arg(args, "session_id"))

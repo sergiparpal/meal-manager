@@ -1,7 +1,7 @@
 """Tool: finalize_ingredient_session — commit a DII session to fridge/dish."""
 
 from ..dii import finalize_session
-from ._common import tool_handler
+from ._common import require_arg, tool_handler
 
 NAME = "finalize_ingredient_session"
 
@@ -32,14 +32,10 @@ SCHEMA = {
 
 @tool_handler(NAME)
 def HANDLER(args: dict, **kwargs):
-    commit_to_fridge = args.get("commit_to_fridge", True)
-    commit_to_dish = args.get("commit_to_dish", True)
-    if not isinstance(commit_to_fridge, bool):
-        raise ValueError("commit_to_fridge must be a boolean")
-    if not isinstance(commit_to_dish, bool):
-        raise ValueError("commit_to_dish must be a boolean")
+    # Bool validation of the commit flags lives in finalize_session (the API
+    # layer), so it is not duplicated here.
     return finalize_session(
-        args["session_id"],
-        commit_to_fridge=commit_to_fridge,
-        commit_to_dish=commit_to_dish,
+        require_arg(args, "session_id"),
+        commit_to_fridge=args.get("commit_to_fridge", True),
+        commit_to_dish=args.get("commit_to_dish", True),
     )

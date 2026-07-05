@@ -60,9 +60,32 @@ def tool_handler(name: str):
     return decorate
 
 
-def err(msg: str) -> str:
-    """Build a consistent JSON error response (legacy shim for non-handler callers)."""
-    return json.dumps({"error": msg}, ensure_ascii=False)
+def require_arg(args: dict, key: str):
+    """Fetch a required argument, raising a clear message if it is absent.
+
+    Handlers used to index ``args[key]`` directly, so a missing field surfaced
+    as a bare ``KeyError`` (``{"error": "'key'"}``). This yields an explicit
+    "required argument" message instead.
+    """
+    if not isinstance(args, dict) or key not in args:
+        raise ValueError(f"'{key}' is a required argument")
+    return args[key]
+
+
+def maybe_parse_json_arg(value):
+    """Coerce a possibly-JSON-string argument to its parsed form.
+
+    Some LLMs serialize array/object arguments as JSON strings. Returns the
+    parsed value on success, or the original string unchanged if it is not valid
+    JSON, leaving type validation to the caller. Shared by every handler that
+    accepts array/object arguments so the coercion behaves identically.
+    """
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
 
 
 def _normalize_label(value: str, *, label: str) -> str:
@@ -86,11 +109,9 @@ def normalize_ingredients(ingredients) -> dict:
     """Accept ingredients as dict {name: bool} or list [name, ...] (all essential).
     Also handles JSON strings (some LLMs serialize the argument).
     Raises ValueError if the input cannot be parsed."""
+    ingredients = maybe_parse_json_arg(ingredients)
     if isinstance(ingredients, str):
-        try:
-            ingredients = json.loads(ingredients)
-        except json.JSONDecodeError:
-            raise ValueError(f"Cannot parse ingredients string: {ingredients!r}")
+        raise ValueError(f"Cannot parse ingredients string: {ingredients!r}")
     if isinstance(ingredients, list):
         result = {}
         for ing in ingredients:
@@ -103,6 +124,10 @@ def normalize_ingredients(ingredients) -> dict:
             result[normalize_ingredient_name(key)] = value
     else:
         raise ValueError(f"ingredients must be a dict or list, got {type(ingredients).__name__}")
+    if not result:
+        raise ValueError("ingredients cannot be empty")
+    # Enforce the cap on the de-duplicated result, so a list containing repeats
+    # that collapses under the limit is still accepted.
     if len(result) > MAX_INGREDIENTS:
         raise ValueError(f"Too many ingredients (max {MAX_INGREDIENTS})")
     return result
@@ -119,5 +144,7 @@ def days_since_last_cook() -> dict[str, int]:
         except ValueError as exc:
             logger.warning("Skipping malformed history entry %r: %s", name, exc)
             continue
-        result[name.strip().lower()] = max(days, 0)
+        # history_repo.load() already returns normalized (stripped/lowercased)
+        # keys, so no re-normalization is needed here.
+        result[name] = max(days, 0)
     return result

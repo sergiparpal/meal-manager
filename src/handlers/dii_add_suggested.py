@@ -1,7 +1,7 @@
 """Tool: dii_add_suggested — accept the current DII suggestion."""
 
 from ..dii import add_suggested_ingredient
-from ._common import tool_handler
+from ._common import require_arg, tool_handler
 
 NAME = "dii_add_suggested"
 
@@ -24,4 +24,4 @@ SCHEMA = {
 
 @tool_handler(NAME)
 def HANDLER(args: dict, **kwargs):
-    return add_suggested_ingredient(args["session_id"])
+    return add_suggested_ingredient(require_arg(args, "session_id"))

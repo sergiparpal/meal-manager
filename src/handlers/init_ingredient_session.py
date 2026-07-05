@@ -1,13 +1,14 @@
 """Tool: init_ingredient_session — create or reset a DII session."""
 
-import json
 import uuid
 
-from ..dii import create_session, get_session_state
+from ..dii import create_session, get_session_state, validate_session_id
 from ._common import (
     MAX_INGREDIENTS,
+    maybe_parse_json_arg,
     normalize_dish_name,
     normalize_ingredient_name,
+    require_arg,
     tool_handler,
 )
 
@@ -54,16 +55,6 @@ SCHEMA = {
 }
 
 
-def _maybe_parse_json(value):
-    """LLMs sometimes serialize array arguments as JSON strings — accept both."""
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except json.JSONDecodeError:
-            return value
-    return value
-
-
 def _validate_parallel_arrays(ingredients, is_essential):
     if not isinstance(ingredients, list) or not isinstance(is_essential, list):
         raise ValueError("ingredients and is_essential must be arrays")
@@ -103,14 +94,15 @@ def _resolve_session_id(provided):
         return uuid.uuid4().hex[:16], False
     if not isinstance(provided, str) or not provided.strip():
         raise ValueError("session_id must be a non-empty string when provided")
-    return provided.strip(), True
+    # Reject path-unsafe ids up front (ids become session filenames).
+    return validate_session_id(provided.strip()), True
 
 
 @tool_handler(NAME)
 def HANDLER(args: dict, **kwargs):
-    dish_name = normalize_dish_name(args["dish_name"])
-    ingredients = _maybe_parse_json(args["ingredients"])
-    is_essential = _maybe_parse_json(args["is_essential"])
+    dish_name = normalize_dish_name(require_arg(args, "dish_name"))
+    ingredients = maybe_parse_json_arg(require_arg(args, "ingredients"))
+    is_essential = maybe_parse_json_arg(require_arg(args, "is_essential"))
 
     _validate_parallel_arrays(ingredients, is_essential)
     ranked = _build_ranked(ingredients, is_essential)

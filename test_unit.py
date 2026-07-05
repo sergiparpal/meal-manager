@@ -471,6 +471,92 @@ def test_tuning_hysteresis():
 # ---------------------------------------------------------------------------
 
 
+def test_dish_ingredient_keys_normalized_on_construction():
+    print("\n-- Dish: ingredient keys normalized on direct construction --")
+    d = Dish(name="Soup", ingredients={"  Tomato ": True, "BASIL": False})
+    check("ingredient keys stripped+lowercased",
+          set(d.ingredients.keys()) == {"tomato", "basil"}, f"got {list(d.ingredients)}")
+    check("can_cook_with matches normalized fridge", d.can_cook_with({"tomato"}) is True)
+
+
+def test_normalize_ingredients_empty_rejected():
+    print("\n-- normalize_ingredients: empty rejected --")
+    for value in ([], {}, "[]", "{}"):
+        try:
+            _normalize_ingredients(value)
+            check(f"rejects empty {value!r}", False, "should have raised ValueError")
+        except ValueError:
+            check(f"rejects empty {value!r}", True)
+
+
+def test_normalize_ingredients_dedup_under_limit():
+    print("\n-- normalize_ingredients: dedupes before applying the cap --")
+    # A list with many repeats that collapses to a single unique key must be
+    # accepted (the cap applies to the de-duplicated result, not the raw list).
+    result = _normalize_ingredients(["tomato"] * 150)
+    check("repeats collapse to one ingredient", result == {"tomato": True}, f"got {result}")
+    # Genuinely too many distinct ingredients is still rejected.
+    try:
+        _normalize_ingredients([f"ing{i}" for i in range(101)])
+        check("rejects >100 distinct ingredients", False, "should have raised")
+    except ValueError:
+        check("rejects >100 distinct ingredients", True)
+
+
+def test_tuning_deployed_weights_clamps_out_of_band():
+    print("\n-- tuning.deployed_weights (clamp + re-derive) --")
+    mw, tw = tuning.deployed_weights(
+        {"deployed_match_weight": 1.5, "deployed_time_weight": 0.4}
+    )
+    check("clamps match weight to band upper bound", mw == tuning.BAND[1], f"got {mw}")
+    check("re-derives complementary time weight", abs(mw + tw - 1.0) < 1e-9, f"got {tw}")
+    mw2, _ = tuning.deployed_weights({"deployed_match_weight": 0.0})
+    check("clamps match weight to band lower bound", mw2 == tuning.BAND[0], f"got {mw2}")
+
+
+def test_tuning_validate_state_corruption_branches():
+    print("\n-- tuning.validate_state (corruption branches) --")
+
+    mismatched = copy.deepcopy(tuning.initialize_state())
+    mismatched["candidates"] = [0.1, 0.2, 0.3]
+    check("rejects mismatched candidate set",
+          tuning.validate_state(mismatched)["observations"] == 0)
+
+    missing_key = copy.deepcopy(tuning.initialize_state())
+    missing_key["S"].pop(next(iter(missing_key["S"])))
+    check("rejects S/C key mismatch",
+          tuning.validate_state(missing_key)["observations"] == 0)
+
+    non_numeric = copy.deepcopy(tuning.initialize_state())
+    non_numeric["C"][next(iter(non_numeric["C"]))] = "lots"
+    check("rejects non-numeric mass",
+          tuning.validate_state(non_numeric)["observations"] == 0)
+
+    boolean_mass = copy.deepcopy(tuning.initialize_state())
+    boolean_mass["S"][next(iter(boolean_mass["S"]))] = True
+    check("rejects boolean mass (bool is not a valid float here)",
+          tuning.validate_state(boolean_mass)["observations"] == 0)
+
+
+def test_tuning_compute_rewards_no_signal():
+    print("\n-- tuning.compute_rewards (no-signal cook returns None) --")
+    a = Dish(name="rice bowl", ingredients={"rice": True})
+    b = Dish(name="pasta", ingredients={"noodles": True})
+    dishes = [a, b]
+    fridge = {"rice", "noodles"}
+    # The cooked dish is cookable but was cooked today (days=0 < COOLDOWN_DAYS),
+    # so it scores 0 for every candidate and carries no learning signal.
+    rewards = tuning.compute_rewards(
+        "rice bowl", dishes, fridge, {"rice bowl": 0}, tuning.CANDIDATES
+    )
+    check("cooldown-zeroed cook yields no signal (None)", rewards is None, f"got {rewards}")
+    # Sanity contrast: a normal cook does produce a reward dict.
+    rewards2 = tuning.compute_rewards(
+        "rice bowl", dishes, fridge, {"rice bowl": 14, "pasta": 3}, tuning.CANDIDATES
+    )
+    check("normal cook produces rewards", isinstance(rewards2, dict) and len(rewards2) > 0)
+
+
 def main():
     test_dish_normalize_ingredient()
     test_dish_normalize_name()
@@ -482,6 +568,7 @@ def main():
     test_dish_from_dict_invalid()
     test_dish_add_ingredient()
     test_dish_add_ingredient_validation()
+    test_dish_ingredient_keys_normalized_on_construction()
 
     test_calculate_score_basic()
     test_calculate_score_cooldown()
@@ -502,13 +589,18 @@ def main():
     test_normalize_ingredients_json_string_dict()
     test_normalize_ingredients_json_string_list()
     test_normalize_ingredients_invalid()
+    test_normalize_ingredients_empty_rejected()
+    test_normalize_ingredients_dedup_under_limit()
 
     test_tuning_initial_state()
     test_tuning_deployed_weights_fallback()
+    test_tuning_deployed_weights_clamps_out_of_band()
     test_tuning_validate_state()
+    test_tuning_validate_state_corruption_branches()
     test_tuning_compute_rewards_not_cookable()
     test_tuning_compute_rewards_single_dish()
     test_tuning_compute_rewards_top_rank()
+    test_tuning_compute_rewards_no_signal()
     test_tuning_apply_update_pure()
     test_tuning_cold_start()
     test_tuning_shift_after_warmup()

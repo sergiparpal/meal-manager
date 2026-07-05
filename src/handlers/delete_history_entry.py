@@ -1,7 +1,7 @@
 """Tool: delete_history_entry — undo a cook registration."""
 
 from ..repositories import history_repo
-from ._common import normalize_dish_name, tool_handler
+from ._common import normalize_dish_name, require_arg, tool_handler
 
 NAME = "delete_history_entry"
 
@@ -24,7 +24,7 @@ SCHEMA = {
 
 @tool_handler(NAME)
 def HANDLER(args: dict, **kwargs):
-    raw_name = args["dish_name"]
+    raw_name = require_arg(args, "dish_name")
     name = normalize_dish_name(raw_name)
     if not history_repo.remove_entry(name):
         raise LookupError(f"'{raw_name}' not found in cooking history.")

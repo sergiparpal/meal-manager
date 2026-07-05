@@ -1,7 +1,7 @@
 """Tool: dii_skip_suggested — reject the current DII suggestion."""
 
 from ..dii import skip_suggested_ingredient
-from ._common import tool_handler
+from ._common import require_arg, tool_handler
 
 NAME = "dii_skip_suggested"
 
@@ -23,4 +23,4 @@ SCHEMA = {
 
 @tool_handler(NAME)
 def HANDLER(args: dict, **kwargs):
-    return skip_suggested_ingredient(args["session_id"])
+    return skip_suggested_ingredient(require_arg(args, "session_id"))
