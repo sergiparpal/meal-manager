@@ -188,9 +188,9 @@ Swap `get_meal_suggestions` for any other module under `src/handlers/`, for exam
 python3 test_integration.py
 ```
 
-This script seeds its own test data, exercises all twenty tools end-to-end, and restores the original data files afterwards.
+This script creates a throw-away temp directory, points the repositories and DII session store at it via `configure()`, seeds its own fixtures, and exercises all twenty tools end-to-end. The real `data/` files are never touched — the temp directory is deleted on teardown.
 
-For the fastest feedback on pure domain logic, run `python3 test_unit.py`. It covers the dataclass, scoring, shopping, and ingredient-normalization helpers without touching `data/`.
+For the fastest feedback on pure domain logic, run `python3 test_unit.py`. It covers the dataclass, scoring, shopping, weight-tuning, and ingredient-normalization helpers without touching `data/`.
 
 ---
 
