@@ -206,7 +206,7 @@ meal-manager/
 │   ├── tuning.py              # Online learner — self-adjusts the availability/recency blend
 │   ├── handlers/              # One module per registered tool (NAME, SCHEMA, HANDLER)
 │   │   ├── __init__.py                     # iter_tools() walks the package and yields each triple
-│   │   ├── _common.py                      # Shared helpers (err, normalization, input limits)
+│   │   ├── _common.py                      # Shared helpers (tool_handler decorator, normalization, input limits)
 │   │   ├── get_meal_suggestions.py         # Rank cookable dishes by availability and recency
 │   │   ├── get_quick_shopping_list.py      # Single-ingredient purchases that unlock new dishes
 │   │   ├── get_tuning_state.py             # Read-only report of the self-adjusted suggestion weights

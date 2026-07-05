@@ -43,7 +43,7 @@ One module per registered tool. Each public submodule (anything not prefixed wit
 
 `src/handlers/__init__.py:iter_tools()` walks the package via `pkgutil.iter_modules`, importing each non-underscore module and yielding its `(NAME, SCHEMA, HANDLER)` triple in alphabetical order. Modules starting with `_` (like `_common.py`) are skipped.
 
-- **`_common.py`** — Shared helpers: `tool_handler` decorator (the canonical wrapper for every handler), `err()` legacy shim, `normalize_dish_name`, `normalize_ingredient_name`, `normalize_ingredients`, `days_since_last_cook`, plus the input-limit constants (`MAX_NAME_LEN`, `MAX_INGREDIENTS`, `MAX_BATCH_SIZE`, `MAX_FRIDGE_UPDATE`). Both `normalize_dish_name` and `normalize_ingredient_name` delegate to a single `_normalize_label(value, *, label)` helper so the rules (non-empty, max length) live in one place.
+- **`_common.py`** — Shared helpers: `tool_handler` decorator (the canonical wrapper for every handler), `require_arg` (explicit "required argument" error instead of a bare `KeyError`), `maybe_parse_json_arg` (coerces JSON-string arguments that some LLMs emit), `normalize_dish_name`, `normalize_ingredient_name`, `normalize_ingredients`, `days_since_last_cook`, plus the input-limit constants (`MAX_NAME_LEN`, `MAX_INGREDIENTS`, `MAX_BATCH_SIZE`, `MAX_FRIDGE_UPDATE`). Both `normalize_dish_name` and `normalize_ingredient_name` delegate to a single `_normalize_label(value, *, label)` helper so the rules (non-empty, max length) live in one place.
 
 ### Domain modules (`src/`)
 

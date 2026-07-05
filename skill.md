@@ -26,7 +26,7 @@ Read-only. Reports the current self-adjusted suggestion weights (availability vs
 
 ### `get_quick_shopping_list`
 
-Identifies individual ingredients that, when purchased, unlock new dishes. Returns the missing ingredient, the dish it unlocks, and the projected score.
+Identifies individual ingredients that, when purchased, unlock new dishes. For each single missing essential ingredient it returns `missing_ingredient`, `unlocks_dishes` (a comma-separated list of every dish that ingredient unlocks), and the projected `score`.
 
 - **When to use:**
   - The user says they're at the grocery store or going shopping.

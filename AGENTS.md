@@ -125,7 +125,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 
 ## Concurrency
 
-- File-backed stores use module-level `threading.Lock` instances.
+- Each file-backed store singleton owns its own `threading.Lock` instance attribute (`self.lock` on the dish, fridge, and tuning repos; `self._lock` on the history repo).
 - Hold the appropriate lock around load-modify-save sequences.
 - DII sessions also use per-session locks plus a global lock for session maps.
 - Do not bypass the locking helpers when changing persistence behavior.
