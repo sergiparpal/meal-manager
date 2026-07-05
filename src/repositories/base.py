@@ -50,3 +50,18 @@ class HistoryRepository(Protocol):
         expected_value: str,
         previous_value: str | None,
     ) -> bool: ...
+
+
+class TuningRepository(Protocol):
+    """Persistence boundary for the online suggestion-weight learner.
+
+    State is a single JSON object (candidate grid, discounted reward/count
+    sums, observation counter, deployed weights). ``load`` never raises —
+    a missing or corrupt file yields a fresh initialized state. The lock is
+    exposed so the cook handler can wrap the load-modify-save sequence.
+    """
+
+    lock: threading.Lock
+
+    def load(self) -> dict: ...
+    def save(self, state: dict) -> None: ...

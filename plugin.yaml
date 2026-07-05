@@ -4,6 +4,7 @@ description: Meal planning and fridge inventory manager for Hermes agents.
 provides_tools:
   - get_meal_suggestions
   - get_quick_shopping_list
+  - get_tuning_state
   - update_fridge_inventory
   - register_cooked_meal
   - delete_history_entry

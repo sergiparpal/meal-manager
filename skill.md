@@ -8,12 +8,21 @@ The tools are auto-registered under the toolset **"meal_manager"** via `register
 
 ### `get_meal_suggestions`
 
-Returns a list of dishes ranked by score based on what's in the fridge and what has been cooked recently.
+Returns a list of dishes ranked by score based on what's in the fridge and what has been cooked recently. The availability/recency blend behind the score **self-adjusts over time** as meals are registered as cooked — you don't manage this; it happens automatically in the tool layer.
 
 - **When to use:**
   - The user asks "what should I cook tonight?" or any variant.
   - The user has just updated the fridge and wants to know what they can cook now.
   - After running `update_fridge_inventory` with action "add" (see proactivity directives).
+
+### `get_tuning_state`
+
+Read-only. Reports the current self-adjusted suggestion weights (availability vs recency, which sum to 1.0), how many learning observations have accumulated, and whether adaptive learning is active yet.
+
+- **When to use:**
+  - The user asks why suggestions changed, or how the ranking is weighted right now.
+  - The user asks whether the system is "learning" or wants to see the current blend (e.g. "availability 0.62 / recency 0.38").
+  - Never needed to make a suggestion — it's purely for transparency.
 
 ### `get_quick_shopping_list`
 

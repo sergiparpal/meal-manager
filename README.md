@@ -2,7 +2,7 @@
 
 An intelligent meal planning and fridge inventory management system structured as an official Hermes plugin. It helps users decide what to cook for dinner and what to buy at the grocery store by analyzing their current fridge contents, recipe catalog, and cooking history.
 
-An AI assistant invokes the nineteen tool handlers registered via `__init__.py:register(ctx)` to deliver personalized dinner suggestions, generate optimized shopping lists, manage fridge inventory, manage the recipe catalog, track cooked meals, and interactively build ingredient lists via the Dynamic Ingredient Interface (DII) — all with zero external dependencies.
+An AI assistant invokes the twenty tool handlers registered via `__init__.py:register(ctx)` to deliver personalized dinner suggestions, generate optimized shopping lists, manage fridge inventory, manage the recipe catalog, track cooked meals, and interactively build ingredient lists via the Dynamic Ingredient Interface (DII) — all with zero external dependencies.
 
 ---
 
@@ -18,7 +18,7 @@ The result is a system that offers the user the freedom of conversation while gu
 
 **Ambiguity Stops at the Schema.** Free-text input is welcome in conversation; past the tool boundary, every argument is typed, normalized, and explicit. Schemas refuse fuzzy values — the LLM must commit to a concrete `dish_name`, a concrete `action` enum, a concrete `is_essential` boolean. The cost of interpretation is paid once, at parse time, and never re-paid by downstream logic. The database stays clean by construction, not by convention.
 
-**Reproducibility as User Trust.** Given identical fridge contents, recipe catalog, and cooking history, the plugin always produces identical suggestions in identical order. The 60/40 match/recency blend, the 80/20 essential/optional weighting, the 2-day cooldown, and the 14-day recency cap are explicit constants in source — not emergent model output. Users can predict the system because the system predicts itself; every state transition can be replayed from the JSON files under `data/`.
+**Reproducibility as User Trust.** Given identical fridge contents, recipe catalog, cooking history, and tuning state, the plugin always produces identical suggestions in identical order. The 80/20 essential/optional weighting, the 2-day cooldown, and the 14-day recency cap are explicit constants in source — not emergent model output. The match/recency blend starts at 60/40 and self-adjusts *slowly and deterministically* as meals are cooked: a bounded online learner (`src/tuning.py`) nudges the availability weight one small, hysteresis-gated step per cook, never randomly and always within a fixed band. Suggestions therefore remain reproducible **given the state files** — the learned weight lives in `data/tuning.json` alongside the rest, every state transition can be replayed, and the current blend is inspectable at any time via `get_tuning_state`.
 
 **Tokens Are a Cost, Not a Feature.** Work the code can do does not belong in the prompt. Ranking, session state, ingredient normalization, and persistence run in microseconds without a model round-trip. The result is a plugin that is cheap to run, fast to respond, testable without mocking an LLM, and structurally incapable of hallucinating itself into an inconsistent state.
 
@@ -26,7 +26,8 @@ The result is a system that offers the user the freedom of conversation while gu
 
 ## Features
 
-- **Smart Meal Suggestions** — Ranks every dish in the catalog using a weighted scoring algorithm that combines ingredient availability (60%) with cooking recency (40%). Dishes cooked fewer than 2 days ago are automatically excluded.
+- **Smart Meal Suggestions** — Ranks every dish in the catalog using a weighted scoring algorithm that combines ingredient availability with cooking recency (starting at a 60/40 blend). Dishes cooked fewer than 2 days ago are automatically excluded.
+- **Adaptive Suggestion Weights** — The availability/recency blend self-adjusts with use. Each cooked meal feeds a bounded, deterministic online learner (no background job, no randomness) that nudges the weighting toward whatever has been ranking your actual choices best. The current blend and learning status are inspectable at any time via `get_tuning_state`, and a fresh install behaves exactly like the classic 60/40 blend until enough meals accumulate.
 - **One-Ingredient Shopping List** — Identifies single ingredients that, once purchased, unlock entirely new dishes. Prioritized by the projected score of the unlocked meal.
 - **Fridge Inventory Management** — Add or remove ingredients as you shop or cook. Ingredient and dish names are normalized to lowercase for consistent matching.
 - **Cooking History Tracking** — Logs cooked meals with ISO dates. History keys are normalized to lowercase on load, so comparisons are case-insensitive.
@@ -132,12 +133,13 @@ Reply naturally — *"yes"*, *"skip"*, *"remove X"*, *"also add Y"*, or *"done"*
 
 ### As a Hermes Plugin
 
-The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `__init__.py`. It registers nineteen tools:
+The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `__init__.py`. It registers twenty tools:
 
 | Tool | Purpose |
 |---|---|
 | `get_meal_suggestions` | Returns a ranked list of dishes you can cook right now |
 | `get_quick_shopping_list` | Returns single-ingredient purchases that unlock new dishes |
+| `get_tuning_state` | Reports the current self-adjusted availability/recency blend and learning status |
 | `update_fridge_inventory` | Adds or removes ingredients from the fridge |
 | `register_cooked_meal` | Logs a dish as cooked today and removes its essential ingredients |
 | `delete_history_entry` | Undo for `register_cooked_meal` — removes a dish from history |
@@ -186,7 +188,7 @@ Swap `get_meal_suggestions` for any other module under `src/handlers/`, for exam
 python3 test_integration.py
 ```
 
-This script seeds its own test data, exercises all nineteen tools end-to-end, and restores the original data files afterwards.
+This script seeds its own test data, exercises all twenty tools end-to-end, and restores the original data files afterwards.
 
 For the fastest feedback on pure domain logic, run `python3 test_unit.py`. It covers the dataclass, scoring, shopping, and ingredient-normalization helpers without touching `data/`.
 
@@ -201,11 +203,13 @@ meal-manager/
 │   ├── dish.py                # Dish dataclass — recipe model (essential/optional ingredients)
 │   ├── suggestion.py          # Scoring engine — ranks dishes by availability + recency
 │   ├── shopping.py            # Shopping suggestions — single-ingredient unlock logic
+│   ├── tuning.py              # Online learner — self-adjusts the availability/recency blend
 │   ├── handlers/              # One module per registered tool (NAME, SCHEMA, HANDLER)
 │   │   ├── __init__.py                     # iter_tools() walks the package and yields each triple
 │   │   ├── _common.py                      # Shared helpers (err, normalization, input limits)
 │   │   ├── get_meal_suggestions.py         # Rank cookable dishes by availability and recency
 │   │   ├── get_quick_shopping_list.py      # Single-ingredient purchases that unlock new dishes
+│   │   ├── get_tuning_state.py             # Read-only report of the self-adjusted suggestion weights
 │   │   ├── update_fridge_inventory.py      # Add or remove ingredients from the fridge
 │   │   ├── register_cooked_meal.py         # Log a dish as cooked and auto-remove essentials
 │   │   ├── delete_history_entry.py         # Undo a cooked-meal entry from history
@@ -225,10 +229,11 @@ meal-manager/
 │   │   └── finalize_ingredient_session.py  # Commit the DII session to fridge and/or dish catalog
 │   ├── repositories/          # Persistence layer behind Protocol seams
 │   │   ├── __init__.py        # Singletons + configure(data_dir)
-│   │   ├── base.py            # DishRepository / FridgeRepository / HistoryRepository
+│   │   ├── base.py            # DishRepository / FridgeRepository / HistoryRepository / TuningRepository
 │   │   ├── json_dish.py       # Recipe catalog persistence (data/dishes.json)
 │   │   ├── json_fridge.py     # Fridge inventory persistence (data/fridge.json)
-│   │   └── json_history.py    # Cooking history persistence (data/history.json)
+│   │   ├── json_history.py    # Cooking history persistence (data/history.json)
+│   │   └── json_tuning.py     # Online-learner state persistence (data/tuning.json)
 │   └── dii/                   # Dynamic Ingredient Interface
 │       ├── __init__.py        # Public API + configure(session_dir)
 │       ├── session.py         # DIISession dataclass + serialization
@@ -240,6 +245,7 @@ meal-manager/
 │   ├── dishes.json            # Recipe catalog (dishes with ingredients)
 │   ├── fridge.json            # Current fridge inventory (list of ingredients)
 │   ├── history.json           # Cooking history (dish name → last-cooked ISO date)
+│   ├── tuning.json            # (created lazily) Online-learner state for the suggestion blend
 │   └── sessions/              # (created lazily) DII session backups for crash recovery
 ├── plugin.yaml                # Hermes plugin manifest (name + provided tools)
 ├── __init__.py                # Plugin entry point — register(ctx, *, data_dir=None)
@@ -286,6 +292,23 @@ meal-manager/
 ```json
 {"rice with chicken": "2026-04-02"}
 ```
+
+**`data/tuning.json`** — Online-learner state for the availability/recency blend (created lazily on the first learning event):
+
+```json
+{
+  "version": 1,
+  "candidates": [0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80],
+  "S": {"0.60": 6.0, "...": "discounted reward sum per candidate"},
+  "C": {"0.60": 10.0, "...": "discounted observation count per candidate"},
+  "observations": 0,
+  "deployed_match_weight": 0.60,
+  "deployed_time_weight": 0.40
+}
+```
+
+- `deployed_match_weight` / `deployed_time_weight` are the currently deployed availability/recency weights (they sum to 1.0).
+- A missing or corrupt file falls back to a fresh initialized state, reproducing the classic 60/40 blend.
 
 ---
 

@@ -20,10 +20,16 @@ keeps a valid reference.
 
 from pathlib import Path
 
-from .base import DishRepository, FridgeRepository, HistoryRepository
+from .base import (
+    DishRepository,
+    FridgeRepository,
+    HistoryRepository,
+    TuningRepository,
+)
 from .json_dish import JsonDishRepository
 from .json_fridge import JsonFridgeRepository
 from .json_history import JsonHistoryRepository
+from .json_tuning import JsonTuningRepository
 
 # ---------------------------------------------------------------------------
 # Default singletons
@@ -37,6 +43,7 @@ _DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 dish_repo: DishRepository = JsonDishRepository(_DEFAULT_DATA_DIR / "dishes.json")
 fridge_repo: FridgeRepository = JsonFridgeRepository(_DEFAULT_DATA_DIR / "fridge.json")
 history_repo: HistoryRepository = JsonHistoryRepository(_DEFAULT_DATA_DIR / "history.json")
+tuning_repo: TuningRepository = JsonTuningRepository(_DEFAULT_DATA_DIR / "tuning.json")
 
 
 def configure(data_dir) -> None:
@@ -55,17 +62,21 @@ def configure(data_dir) -> None:
     dish_repo.path = data_dir / "dishes.json"
     fridge_repo.path = data_dir / "fridge.json"
     history_repo.path = data_dir / "history.json"
+    tuning_repo.path = data_dir / "tuning.json"
 
 
 __all__ = [
     "DishRepository",
     "FridgeRepository",
     "HistoryRepository",
+    "TuningRepository",
     "JsonDishRepository",
     "JsonFridgeRepository",
     "JsonHistoryRepository",
+    "JsonTuningRepository",
     "configure",
     "dish_repo",
     "fridge_repo",
     "history_repo",
+    "tuning_repo",
 ]

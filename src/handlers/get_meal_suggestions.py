@@ -1,6 +1,7 @@
 """Tool: get_meal_suggestions — ranked dishes cookable from current fridge."""
 
-from ..repositories import dish_repo, fridge_repo
+from .. import tuning
+from ..repositories import dish_repo, fridge_repo, tuning_repo
 from ..suggestion import suggest_dishes
 from ._common import days_since_last_cook, tool_handler
 
@@ -25,7 +26,9 @@ def HANDLER(args: dict, **kwargs):
     fridge = fridge_repo.load_set()
     days = days_since_last_cook()
 
-    ranking = suggest_dishes(dishes, fridge, days)
+    match_weight, time_weight = tuning.deployed_weights(tuning_repo.load())
+    ranking = suggest_dishes(dishes, fridge, days,
+                             match_weight=match_weight, time_weight=time_weight)
     return [
         {"dish": dish.name, "score": round(score, 2)}
         for dish, score in ranking

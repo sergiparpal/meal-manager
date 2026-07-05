@@ -7,6 +7,7 @@ Usage:
     python3 test_unit.py
 """
 
+import copy
 import importlib
 import sys
 from pathlib import Path
@@ -22,12 +23,14 @@ _pkg = importlib.import_module(_PLUGIN_DIR.name)
 _dish_mod = importlib.import_module(".src.dish", _PLUGIN_DIR.name)
 _suggestion_mod = importlib.import_module(".src.suggestion", _PLUGIN_DIR.name)
 _shopping_mod = importlib.import_module(".src.shopping", _PLUGIN_DIR.name)
+_tuning_mod = importlib.import_module(".src.tuning", _PLUGIN_DIR.name)
 _handlers_common = importlib.import_module(".src.handlers._common", _PLUGIN_DIR.name)
 
 Dish = _dish_mod.Dish
 calculate_score = _suggestion_mod.calculate_score
 suggest_dishes = _suggestion_mod.suggest_dishes
 suggest_quick_shopping = _shopping_mod.suggest_quick_shopping
+tuning = _tuning_mod
 _normalize_ingredients = _handlers_common.normalize_ingredients
 
 # ---------------------------------------------------------------------------
@@ -342,6 +345,128 @@ def test_normalize_ingredients_invalid():
 
 
 # ---------------------------------------------------------------------------
+# Online weight tuning (src/tuning.py)
+# ---------------------------------------------------------------------------
+
+
+def test_tuning_initial_state():
+    print("\n-- tuning.initialize_state --")
+    state = tuning.initialize_state()
+    check("deploys prior w", state["deployed_match_weight"] == tuning.PRIOR_W)
+    check("time weight complements availability",
+          abs(state["deployed_match_weight"] + state["deployed_time_weight"] - 1.0) < 1e-9)
+    check("zero observations", state["observations"] == 0)
+    check("all candidates in band",
+          all(tuning.BAND[0] <= w <= tuning.BAND[1] for w in state["candidates"]))
+    check("anchor is the initial argmax",
+          max(state["candidates"], key=lambda w: tuning._mean(state, tuning._key(w))) == tuning.PRIOR_W)
+
+
+def test_tuning_deployed_weights_fallback():
+    print("\n-- tuning.deployed_weights (fallback) --")
+    mw, tw = tuning.deployed_weights({})
+    check("falls back to prior blend", mw == tuning.PRIOR_W and abs(mw + tw - 1.0) < 1e-9)
+
+
+def test_tuning_validate_state():
+    print("\n-- tuning.validate_state --")
+    good = tuning.initialize_state()
+    check("accepts a well-formed state", tuning.validate_state(good) is good)
+    check("rejects non-dict", tuning.validate_state("nope")["observations"] == 0)
+    check("rejects missing fields", tuning.validate_state({"version": 1})["observations"] == 0)
+
+
+def test_tuning_compute_rewards_not_cookable():
+    print("\n-- tuning.compute_rewards (cooked dish not cookable) --")
+    d1 = Dish(name="needs eggs")
+    d1.ingredients = {"eggs": True}
+    d2 = Dish(name="rice")
+    d2.ingredients = {"rice": True}
+    rewards = tuning.compute_rewards("needs eggs", [d1, d2], {"rice"}, {}, tuning.CANDIDATES)
+    check("returns None (degenerate)", rewards is None)
+
+
+def test_tuning_compute_rewards_single_dish():
+    print("\n-- tuning.compute_rewards (N < 2) --")
+    d1 = Dish(name="rice")
+    d1.ingredients = {"rice": True}
+    rewards = tuning.compute_rewards("rice", [d1], {"rice"}, {}, tuning.CANDIDATES)
+    check("returns None (no ranking signal)", rewards is None)
+
+
+def test_tuning_compute_rewards_top_rank():
+    print("\n-- tuning.compute_rewards (top rank -> 1.0) --")
+    top = Dish(name="top dish")
+    top.ingredients = {"a": True}
+    low = Dish(name="low dish")
+    low.ingredients = {"b": True, "x": False}
+    dishes = [top, low]
+    fridge = {"a", "b"}  # optional x absent -> low dish scores strictly lower
+    days = {"top dish": 14, "low dish": 2}
+    rewards = tuning.compute_rewards("top dish", dishes, fridge, days, tuning.CANDIDATES)
+    check("returns a reward dict", rewards is not None)
+    check("winning candidate gets reward 1.0",
+          abs(rewards[tuning._key(0.60)] - 1.0) < 1e-9, f"got {rewards}")
+
+
+def test_tuning_apply_update_pure():
+    print("\n-- tuning.apply_update (pure, non-mutating) --")
+    state = tuning.initialize_state()
+    snapshot = copy.deepcopy(state)
+    rewards = {tuning._key(w): 1.0 for w in tuning.CANDIDATES}
+    new_state = tuning.apply_update(state, rewards)
+    check("input left unchanged", state == snapshot)
+    check("observations incremented", new_state["observations"] == 1)
+    check("count discounted then +1",
+          abs(new_state["C"][tuning._key(0.60)]
+              - (tuning.GAMMA * snapshot["C"][tuning._key(0.60)] + 1)) < 1e-9)
+
+
+def _favor_high_w(state, times):
+    """Apply a reward monotone in w so the top candidate (0.80) clearly wins."""
+    rewards = {tuning._key(w): (w - 0.40) / 0.40 for w in tuning.CANDIDATES}
+    for _ in range(times):
+        state = tuning.apply_update(state, rewards)
+    return tuning.select_deployed(state)
+
+
+def test_tuning_cold_start():
+    print("\n-- tuning.select_deployed (cold start) --")
+    state = _favor_high_w(tuning.initialize_state(), tuning.MIN_OBSERVATIONS - 5)
+    check("stays at prior below MIN_OBSERVATIONS",
+          state["deployed_match_weight"] == tuning.PRIOR_W,
+          f"got {state['deployed_match_weight']}")
+
+
+def test_tuning_shift_after_warmup():
+    print("\n-- tuning.select_deployed (shifts once warm) --")
+    state = _favor_high_w(tuning.initialize_state(), tuning.MIN_OBSERVATIONS + 20)
+    check("shifts upward after MIN_OBSERVATIONS",
+          state["deployed_match_weight"] > tuning.PRIOR_W,
+          f"got {state['deployed_match_weight']}")
+    check("stays within band",
+          tuning.BAND[0] <= state["deployed_match_weight"] <= tuning.BAND[1])
+    check("weights still sum to 1.0",
+          abs(state["deployed_match_weight"] + state["deployed_time_weight"] - 1.0) < 1e-9)
+
+
+def test_tuning_hysteresis():
+    print("\n-- tuning.select_deployed (hysteresis) --")
+    state = tuning.initialize_state()
+    state["observations"] = tuning.MIN_OBSERVATIONS + 5
+    for w in tuning.CANDIDATES:
+        key = tuning._key(w)
+        state["C"][key] = 1.0
+        state["S"][key] = 0.50
+    state["S"][tuning._key(0.60)] = 0.60   # current deployed mean
+    state["S"][tuning._key(0.65)] = 0.62   # best, but only +0.02 (< margin 0.03)
+    result = tuning.select_deployed(state)
+    check("sub-margin advantage does not switch deploy",
+          result["deployed_match_weight"] == 0.60,
+          f"got {result['deployed_match_weight']}")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -377,6 +502,17 @@ def main():
     test_normalize_ingredients_json_string_dict()
     test_normalize_ingredients_json_string_list()
     test_normalize_ingredients_invalid()
+
+    test_tuning_initial_state()
+    test_tuning_deployed_weights_fallback()
+    test_tuning_validate_state()
+    test_tuning_compute_rewards_not_cookable()
+    test_tuning_compute_rewards_single_dish()
+    test_tuning_compute_rewards_top_rank()
+    test_tuning_apply_update_pure()
+    test_tuning_cold_start()
+    test_tuning_shift_after_warmup()
+    test_tuning_hysteresis()
 
     print(f"\n{'='*40}")
     print(f"  {_passed} passed, {_failed} failed")

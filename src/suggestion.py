@@ -37,13 +37,15 @@ def calculate_score(dish, available_ingredients, days_since_last,
     return match_weight * match_percentage + time_weight * normalized_time
 
 
-def suggest_dishes(dishes, available_ingredients, days_since_last):
+def suggest_dishes(dishes, available_ingredients, days_since_last,
+                   match_weight=DEFAULT_MATCH_WEIGHT, time_weight=DEFAULT_TIME_WEIGHT):
     ranking = []
     for dish in dishes:
         if not dish.can_cook_with(available_ingredients):
             continue
         days = days_since_last.get(dish.name, RECENCY_CAP_DAYS)
-        score = calculate_score(dish, available_ingredients, days)
+        score = calculate_score(dish, available_ingredients, days,
+                                match_weight=match_weight, time_weight=time_weight)
         if score > 0:
             ranking.append((dish, score))
     ranking.sort(key=lambda x: x[1], reverse=True)

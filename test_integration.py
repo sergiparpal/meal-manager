@@ -1,4 +1,4 @@
-"""Integration smoke test for all 19 meal_manager tools.
+"""Integration smoke test for all 20 meal_manager tools.
 
 The test creates a throw-away data directory under ``tempfile.gettempdir()``
 and points the repositories + DII session store at it via the package-level
@@ -29,12 +29,13 @@ _pkg = importlib.import_module(_PLUGIN_DIR.name)
 
 _repos_mod = importlib.import_module(".src.repositories", _PLUGIN_DIR.name)
 _dii_mod = importlib.import_module(".src.dii", _PLUGIN_DIR.name)
+_tuning_mod = importlib.import_module(".src.tuning", _PLUGIN_DIR.name)
 
 # ---------------------------------------------------------------------------
 # Tmp data directory lifecycle
 # ---------------------------------------------------------------------------
 
-_DATA_FILES = ["dishes.json", "fridge.json", "history.json"]
+_DATA_FILES = ["dishes.json", "fridge.json", "history.json", "tuning.json"]
 _TMP_DATA_DIR: Path | None = None
 
 
@@ -160,6 +161,7 @@ dii_add_manual = _load_handler("dii_add_manual")
 dii_clear_all = _load_handler("dii_clear_all")
 finalize_ingredient_session = _load_handler("finalize_ingredient_session")
 dii_get_state = _load_handler("dii_get_state")
+get_tuning_state = _load_handler("get_tuning_state")
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -580,6 +582,48 @@ def test_dii_add_manual_empty():
 
 
 # ---------------------------------------------------------------------------
+# Online weight tuning
+# ---------------------------------------------------------------------------
+
+def test_online_weight_tuning():
+    print("\n-- online weight tuning --")
+    # Self-contained cookable scenario: two dishes whose essentials are both in
+    # the fridge, so every cook produces a real (non-skipped) learning event.
+    add_dish({"name": "Tuning Dish A", "ingredients": {"tun_a": True}})
+    add_dish({"name": "Tuning Dish B", "ingredients": {"tun_b": True}})
+    update_fridge_inventory({"action": "add", "ingredients": ["tun_a", "tun_b"]})
+
+    register_cooked_meal({"dish_name": "Tuning Dish A"})   # consumes tun_a
+    update_fridge_inventory({"action": "add", "ingredients": ["tun_a"]})
+    register_cooked_meal({"dish_name": "Tuning Dish B"})   # consumes tun_b
+
+    check("tuning.json created", (_TMP_DATA_DIR / "tuning.json").exists())
+
+    state = _repos_mod.tuning_repo.load()
+    check("observations recorded", state["observations"] >= 1, f"got {state['observations']}")
+    check("deployed match weight within band",
+          _tuning_mod.BAND[0] <= state["deployed_match_weight"] <= _tuning_mod.BAND[1],
+          f"got {state['deployed_match_weight']}")
+
+    # get_meal_suggestions must keep the {dish, score} contract.
+    suggestions = parse(get_meal_suggestions({}))
+    check("suggestions keep {dish, score} shape",
+          isinstance(suggestions, list)
+          and all(set(s.keys()) == {"dish", "score"} for s in suggestions),
+          f"got {suggestions}")
+
+    # get_tuning_state exposes a complementary weight pair.
+    ts = parse(get_tuning_state({}))
+    check("tuning state reports weights",
+          "availability_weight" in ts and "recency_weight" in ts, f"got {ts}")
+    check("weights sum to ~1.0",
+          abs(ts["availability_weight"] + ts["recency_weight"] - 1.0) < 1e-6,
+          f"got {ts}")
+    check("reports candidate grid",
+          isinstance(ts.get("candidates"), list) and len(ts["candidates"]) > 0)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -618,6 +662,10 @@ def main():
         test_dii_finalize_rollback()
         test_dii_get_state()
         test_dii_add_manual_empty()
+
+        # Online weight tuning (self-contained; runs last so it cannot perturb
+        # the fridge/catalog state the earlier assertions depend on).
+        test_online_weight_tuning()
 
     finally:
         _teardown_tmp_data()

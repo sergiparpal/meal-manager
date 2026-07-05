@@ -6,7 +6,7 @@ Read `AGENTS.md` before starting — it contains additional repository-specific 
 
 ## Project Overview
 
-A meal planning and fridge inventory manager structured as a Hermes plugin. The entry point is `__init__.py:register(ctx)`, which auto-discovers the nineteen tool handlers under `src/handlers/` and installs the skill. All state is persisted in JSON files under `data/`.
+A meal planning and fridge inventory manager structured as a Hermes plugin. The entry point is `__init__.py:register(ctx)`, which auto-discovers the twenty tool handlers under `src/handlers/` and installs the skill. All state is persisted in JSON files under `data/`.
 
 Python 3.12+, no external dependencies (stdlib only).
 
@@ -50,17 +50,19 @@ One module per registered tool. Each public submodule (anything not prefixed wit
 - **`dish.py`** — `Dish` dataclass: recipe model with `ingredients` dict mapping name → `bool` (True = essential, False = optional). `__post_init__` enforces the invariant that `Dish.name` is always stored stripped and lowercased — every construction path (direct, `from_dict`, dataclass `replace`) goes through it, so consumers can compare `dish.name` by equality without re-normalizing. `can_cook_with()` checks if all essential ingredients are available. Serialization uses English keys (`name`, `ingredients`). Legacy data files may contain `prep_time` which is silently ignored on load.
 - **`suggestion.py`** — Scoring engine. `calculate_score()` blends ingredient match (60%) with recency (40%). Within ingredient match, essentials count 80% and optionals 20%. Recency is normalized over 14 days. Dishes cooked < 2 days ago score 0. `suggest_dishes()` filters to cookable dishes and ranks by score.
 - **`shopping.py`** — `suggest_quick_shopping()` finds dishes missing exactly one essential ingredient, simulates having it, scores the result, and groups by missing ingredient. Returns `(ingredient, dish_names, max_score)` tuples sorted by score.
+- **`tuning.py`** — Online self-tuning of the availability/recency blend. Pure functions only (no I/O, no locking, no randomness): `initialize_state`/`default_state`/`validate_state` manage the `data/tuning.json` shape; `compute_rewards` replays a cook decision against the pre-cook snapshot and rewards every availability-weight candidate `w` by how highly it ranked the cooked dish; `apply_update` applies the discounted (`GAMMA`) reward/count update; `select_deployed` picks the deployed `w` (cold-start anchor below `MIN_OBSERVATIONS`, then argmax-within-`BAND` gated by `HYSTERESIS_MARGIN`); `deployed_weights` is the safe reader. Hyperparameters are module constants. `suggest_dishes` accepts `match_weight`/`time_weight`, so the deployed blend feeds straight in.
 
 ### Persistence layer (`src/repositories/`)
 
-All file-backed state lives behind repository singletons defined in `src/repositories/__init__.py` (`dish_repo`, `fridge_repo`, `history_repo`). Consumers depend on the `Protocol` types in `base.py`, not on the concrete `Json*Repository` classes — this is the seam that lets tests swap implementations without monkey-patching module-level functions.
+All file-backed state lives behind repository singletons defined in `src/repositories/__init__.py` (`dish_repo`, `fridge_repo`, `history_repo`, `tuning_repo`). Consumers depend on the `Protocol` types in `base.py`, not on the concrete `Json*Repository` classes — this is the seam that lets tests swap implementations without monkey-patching module-level functions.
 
-The data directory is injectable via `src.repositories.configure(data_dir)` — this mutates the existing singletons' `path` attributes in place so modules that already imported `dish_repo` / `fridge_repo` / `history_repo` keep a valid reference. The default (when `configure` is never called) is `<plugin_root>/data/`.
+The data directory is injectable via `src.repositories.configure(data_dir)` — this mutates the existing singletons' `path` attributes in place so modules that already imported `dish_repo` / `fridge_repo` / `history_repo` / `tuning_repo` keep a valid reference. The default (when `configure` is never called) is `<plugin_root>/data/`.
 
-- **`base.py`** — `DishRepository`, `FridgeRepository`, `HistoryRepository` Protocols.
+- **`base.py`** — `DishRepository`, `FridgeRepository`, `HistoryRepository`, `TuningRepository` Protocols.
 - **`json_dish.py`** — `JsonDishRepository` (`<data_dir>/dishes.json`, wraps the `{"dishes": [...]}` envelope). Owns its own `lock` for load-modify-save sequences. `restore(dish)` is the delta-rollback for delete.
 - **`json_fridge.py`** — `JsonFridgeRepository` (`<data_dir>/fridge.json`, flat list, dedup + lowercase on load). `remove_items(items)` is the delta-rollback for finalize.
 - **`json_history.py`** — `JsonHistoryRepository` (`<data_dir>/history.json`, dish name → ISO date). Encapsulates its own lock; `set_entry` returns the previous value for compare-and-swap rollback via `revert_entry`.
+- **`json_tuning.py`** — `JsonTuningRepository` (`<data_dir>/tuning.json`, the online-learner state). Owns its own `lock` for the cook handler's load-modify-save sequence. `load()` never raises: a missing/corrupt/schema-invalid file yields a fresh `tuning.initialize_state()`.
 
 ### DII (`src/dii/`)
 
@@ -76,11 +78,13 @@ The data directory is injectable via `src.repositories.configure(data_dir)` — 
 - `dishes.json` — Recipe catalog. Wraps dishes in `{"dishes": [...]}`; each dish has `name` and `ingredients` (name → bool).
 - `fridge.json` — Fridge inventory (flat array of ingredient strings).
 - `history.json` — Cooking history (dish name → ISO date string).
+- `tuning.json` — (created lazily on the first learning event) Online-learner state for the suggestion blend: candidate grid, discounted reward/count sums (`S`/`C`), `observations`, and the `deployed_match_weight` / `deployed_time_weight`. Missing/corrupt files fall back to a fresh initialized state.
 - `sessions/` — (created lazily) Per-session DII JSON backups for crash recovery. Files are named `{session_id}.json` and auto-cleaned after 30 minutes.
 
 ## Key Design Decisions
 
 - **Essential vs optional ingredients**: In `Dish.ingredients`, `True` = essential (must have to cook), `False` = optional (improves score but not required).
+- **Adaptive suggestion weights**: The availability/recency blend is no longer a fixed source constant — a bounded online learner (`src/tuning.py`, state in `data/tuning.json`) nudges the availability weight `w` (recency is always `1 - w`) one step per cooked meal, full-information and event-driven (no daemon, no randomness). This softens the deterministic-core promise **by design and with maintainer approval**: output stays deterministic *given* `tuning.json`, the weight is bounded to `BAND`, slow-moving (discounted, hysteresis-gated, cold-start-anchored), and auditable via the read-only `get_tuning_state` tool. A fresh/missing `tuning.json` reproduces the historical 0.6/0.4 blend until `MIN_OBSERVATIONS` cooks accumulate.
 - **Recency cooldown**: Dishes cooked fewer than 2 days ago are always excluded (score forced to 0).
 - **Auto-removal on cook**: `register_cooked_meal` removes essential ingredients from the fridge after recording the meal.
 - **Single-ingredient unlock**: Shopping suggestions only surface dishes exactly one essential ingredient away from being cookable.
