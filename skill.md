@@ -132,7 +132,7 @@ Completely replaces the ingredients of an existing dish. Does not merge with pre
 
 ### `clear_fridge`
 
-Empties the fridge completely (saves an empty list).
+Empties the fridge completely (every ingredient and its portion count is dropped).
 
 - **When to use:**
   - The user wants to reset the fridge inventory.
@@ -258,9 +258,17 @@ If `recalculation_needed` is `true` (happens when removing an essential ingredie
 
 **6. Finalization**
 
-`finalize_ingredient_session` saves the ingredients to the fridge and creates/updates the dish. Both commits are enabled by default; pass `commit_to_fridge: false` to skip the fridge update or `commit_to_dish: false` to skip saving the recipe. Confirm:
+`finalize_ingredient_session` saves the ingredients to the fridge and creates/updates the dish. Both commits are enabled by default; pass `commit_to_fridge: false` to skip the fridge update or `commit_to_dish: false` to skip saving the recipe.
 
-> Done! I've saved **pasta carbonara** with 6 ingredients. I also added to the fridge what you didn't have.
+The response reports what happened:
+
+- `committed_to_fridge` / `committed_to_dish` — whether each commit **ran**, not whether it changed anything. A session whose ingredients were all already stocked still reports `true`.
+- `fridge_items_added` — how many ingredients were actually new to the fridge. Use this for the confirmation message: say what you added only when this is above `0`, and don't claim a fridge update on `0`.
+- `warning` — present when the session was already finalized, or when nothing was selected so the catalog was left alone. Relay it instead of reporting success.
+
+Confirm:
+
+> Done! I've saved **pasta carbonara** with 6 ingredients, and added the 2 you didn't have to the fridge.
 
 ### Ingredient format for init
 

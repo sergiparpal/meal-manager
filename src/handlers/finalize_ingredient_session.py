@@ -9,7 +9,9 @@ SCHEMA = {
     "description": (
         "Finalize a DII session, committing the selected ingredients. "
         "Can optionally add ingredients to the fridge and/or create/update "
-        "the dish in the catalog. Cleans up the session afterwards."
+        "the dish in the catalog. The session is marked finalized rather than "
+        "deleted, so calling this again is a no-op that reports a warning; it "
+        "is reclaimed by TTL cleanup."
     ),
     "type": "object",
     "properties": {

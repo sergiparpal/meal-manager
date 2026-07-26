@@ -197,7 +197,7 @@ For the fastest feedback on pure domain logic, run `python3 test_unit.py`. It co
 
 ### Continuous Integration
 
-Both scripts also run in GitHub Actions ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) on every push to `main`, on every pull request, and on manual dispatch. The job checks out the repo on `ubuntu-latest`, sets up Python 3.12, and runs `test_unit.py` followed by `test_integration.py` — no dependency installation step, since there are none to install.
+Both scripts also run in GitHub Actions ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) on every push to `main`, on every pull request, and on manual dispatch. The job runs on `ubuntu-latest` across a Python **3.12, 3.13, and 3.14** matrix — the project declares 3.12+, so the whole supported range is tested rather than just the floor, which is free to do with no dependencies to install. Each leg runs `test_unit.py` followed by `test_integration.py`, and `fail-fast` is off so one failing version does not hide the others.
 
 ---
 
@@ -251,7 +251,7 @@ meal-manager/
 │       └── finalizer.py       # Commits a session via injected repositories
 ├── data/
 │   ├── dishes.json            # Recipe catalog (dishes with ingredients)
-│   ├── fridge.json            # Current fridge inventory (list of ingredients)
+│   ├── fridge.json            # Fridge inventory (ingredient → portion count; null = staple)
 │   ├── history.json           # Cooking history (dish name → last-cooked ISO date)
 │   ├── tuning.json            # (created lazily) Online-learner state for the suggestion blend
 │   └── sessions/              # (created lazily) DII session backups for crash recovery

@@ -23,7 +23,7 @@ python3 test_integration.py
 python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path('.').resolve().parent)); m = importlib.import_module('.src.handlers.get_meal_suggestions', pathlib.Path('.').resolve().name); print(m.HANDLER({}))"
 ```
 
-There is no build step or linter. `test_integration.py` and `test_unit.py` are plain Python scripts with assertions, not a pytest/unittest harness. Both run in CI via `.github/workflows/tests.yml` (Python 3.12 on `ubuntu-latest`) for pushes to `main`, pull requests, and manual dispatch.
+There is no build step or linter. `test_integration.py` and `test_unit.py` are plain Python scripts with assertions, not a pytest/unittest harness. Both run in CI via `.github/workflows/tests.yml` (a Python 3.12/3.13/3.14 matrix on `ubuntu-latest`, `fail-fast: false`) for pushes to `main`, pull requests, and manual dispatch.
 
 ## Architecture
 
@@ -70,7 +70,7 @@ The data directory is injectable via `src.repositories.configure(data_dir)` — 
 - **`store.py`** — `IngredientSessionStore`: in-memory session map mirrored to `data/sessions/` for crash recovery, with TTL cleanup (30 min) debounced by monotonic clock. Owns the global lock and the per-session lock map. Per-session locks are handed out only by the `session_lock(session_id)` context manager, which reference-counts holders and deletes the entry when the last one leaves — nothing else may prune the map. Deleting a lock does not release it, so evicting one mid-critical-section (as the old TTL and orphan-sweep paths did) hands the next caller a fresh mutex and lets two writers into the same session.
 - **`engine.py`** — Pure mutations on a `DIISession` (build, add/skip/remove/add_manual/clear/mark_finalized). No I/O, no locking — those concerns live in the store and the public API. The "essential XOR optional" rule is enforced in a single `_select(session, name, *, essential)` helper used by every code path that adds an ingredient to a selected list. `build_session` is the orchestrator: validation, normalization, session construction, pre-selection, and queue seeding each live in their own named helper.
 - **`presenter.py`** — Builds the LLM-facing response shape (`next_actions`, `instructions`). Decoupled from the engine so the agent UX can change without touching state logic.
-- **`finalizer.py`** — Commits a session via injected `dish_repo` + `fridge_repo`, with delta-rollback of the fridge if the dish save fails.
+- **`finalizer.py`** — Commits a session via injected `dish_repo` + `fridge_repo`, with delta-rollback of the fridge if the dish save fails. Returns `(committed_fridge, committed_dish, items_added_to_fridge)`: `committed_fridge` reports that the commit *ran*, not that it changed anything — a session whose ingredients were all already stocked is as committed as one that added three, and reporting `False` there reads as a failure. The count carries the "how much actually changed" signal, surfaced to the agent as `fridge_items_added`.
 - **`__init__.py`** — Public API: composes the store, engine, presenter, and finalizer into the eight functions consumed by the DII handler modules. Holds the default `IngredientSessionStore` singleton. Also exposes `configure(session_dir)` so hosts and tests can redirect the on-disk session backup directory in place.
 
 ### Data files (`data/`)

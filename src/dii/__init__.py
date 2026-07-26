@@ -1,8 +1,9 @@
 """Dynamic Ingredient Interface — public API.
 
 Composes the session store, pure engine, presenter, and finalizer into the
-eight functions consumed by ``tools.py``. Persistence is injected via the
-shared repository singletons so this layer never touches files directly.
+eight functions consumed by the DII handler modules under ``src/handlers/``.
+Persistence is injected via the shared repository singletons so this layer
+never touches files directly.
 """
 
 import logging

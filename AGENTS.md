@@ -163,7 +163,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 
 ## Testing
 
-- `test_unit.py` covers pure logic in `src/dish.py`, `src/suggestion.py`, `src/shopping.py`, `src/tuning.py`, and `_normalize_ingredients`.
+- `test_unit.py` covers pure logic in `src/dish.py`, `src/suggestion.py`, `src/shopping.py`, `src/tuning.py`, and the `normalize_*` helpers in `src/handlers/_common.py`. It also covers the repository behavior that needs no tool boundary — fridge portion counts (including non-finite values) and `set_entry(only_if_newer=True)` — against a tmp path, not the real `data/`.
 - `test_integration.py` is the end-to-end smoke test for all tool handlers.
 - The integration script creates a throw-away tmp directory, points the repositories and DII session store at it via `configure()`, seeds deterministic fixtures, and removes the directory when finished. The real `data/` files are never touched.
 - It intentionally exercises error cases and may print stack traces for expected failures.
