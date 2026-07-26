@@ -31,6 +31,7 @@ PRIOR_REWARD_ANCHOR = 0.60  # seed reward for the anchor candidate
 PRIOR_REWARD_OTHER = 0.50   # seed reward for all other candidates
 MIN_OBSERVATIONS = 20       # cold start: below this, always deploy PRIOR_W
 HYSTERESIS_MARGIN = 0.03    # don't switch deploy unless clearly better
+MIN_REWARD_SPREAD = 1e-9    # skip events whose reward is identical for all candidates
 
 VERSION = 2
 
@@ -165,6 +166,12 @@ def compute_rewards(cooked_name, dishes, fridge_set, days_map, candidates):
     # That carries no discriminating signal, so skip the event like N<2 rather
     # than feeding a uniform all-zero reward that only discounts accumulated mass.
     if not found_any:
+        return None
+    # A reward vector identical for every candidate cannot discriminate between
+    # weights, yet applying it would still discount accumulated mass by GAMMA and
+    # shrink the spread the learner has built up. Skip such events, exactly as
+    # the found_any guard above skips weight-independent zero rankings.
+    if max(rewards.values()) - min(rewards.values()) < MIN_REWARD_SPREAD:
         return None
     return rewards
 

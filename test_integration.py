@@ -260,6 +260,29 @@ def test_cook_decrements_instead_of_deleting():
           "cnt_a" not in _repos_mod.fridge_repo.load_set())
 
 
+def test_register_cooked_meal_backdated():
+    print("\n-- register_cooked_meal (backdated) --")
+    from datetime import date as _date, timedelta as _timedelta
+    add_dish({"name": "Backdate Dish", "ingredients": {"bd_a": True}})
+    update_fridge_inventory({"action": "set", "ingredients": {"bd_a": 2}})
+
+    past = (_date.today() - _timedelta(days=4)).isoformat()
+    result = parse(register_cooked_meal({"dish_name": "Backdate Dish", "date": past}))
+    check("backdated cook succeeds", "error" not in str(result), f"got {result}")
+    check("history records the given date",
+          _repos_mod.history_repo.load().get("backdate dish") == past,
+          f"got {_repos_mod.history_repo.load()}")
+    check("fridge is still consumed",
+          _repos_mod.fridge_repo.load().get("bd_a") == 1,
+          f"got {_repos_mod.fridge_repo.load()}")
+
+    future = (_date.today() + _timedelta(days=1)).isoformat()
+    bad = parse(register_cooked_meal({"dish_name": "Backdate Dish", "date": future}))
+    check("future date rejected", "error" in bad, f"got {bad}")
+    bad2 = parse(register_cooked_meal({"dish_name": "Backdate Dish", "date": "not-a-date"}))
+    check("malformed date rejected", "error" in bad2, f"got {bad2}")
+
+
 def test_update_fridge_remove():
     print("\n-- update_fridge_inventory (remove) --")
     result = parse(update_fridge_inventory({"action": "remove", "ingredients": ["huevos"]}))
@@ -694,15 +717,23 @@ def test_dii_add_manual_empty():
 
 def test_online_weight_tuning():
     print("\n-- online weight tuning --")
-    # Self-contained cookable scenario: two dishes whose essentials are both in
-    # the fridge, so every cook produces a real (non-skipped) learning event.
-    add_dish({"name": "Tuning Dish A", "ingredients": {"tun_a": True}})
-    add_dish({"name": "Tuning Dish B", "ingredients": {"tun_b": True}})
-    update_fridge_inventory({"action": "add", "ingredients": ["tun_a", "tun_b"]})
+    from datetime import date as _date, timedelta as _timedelta
 
-    register_cooked_meal({"dish_name": "Tuning Dish A"})   # consumes tun_a
-    update_fridge_inventory({"action": "add", "ingredients": ["tun_a"]})
-    register_cooked_meal({"dish_name": "Tuning Dish B"})   # consumes tun_b
+    # Give the two dishes opposing profiles so the ranking depends on w and the
+    # cook produces a real (non-skipped) learning event: A is well-rested but has
+    # no optionals, B has three optionals in stock but was cooked recently.
+    add_dish({"name": "Tuning Dish A", "ingredients": {"tun_a": True}})
+    add_dish({"name": "Tuning Dish B", "ingredients": {
+        "tun_b": True, "tun_o1": False, "tun_o2": False, "tun_o3": False,
+    }})
+    update_fridge_inventory({"action": "set", "ingredients": {
+        "tun_a": 5, "tun_b": 5, "tun_o1": None, "tun_o2": None, "tun_o3": None,
+    }})
+    _repos_mod.history_repo.set_entry(
+        "tuning dish b", (_date.today() - _timedelta(days=3)).isoformat()
+    )
+
+    register_cooked_meal({"dish_name": "Tuning Dish A"})
 
     check("tuning.json created", (_TMP_DATA_DIR / "tuning.json").exists())
 
@@ -926,6 +957,7 @@ def main():
         # state, so they cannot perturb the assertions above.
         test_fridge_counts_and_staples()
         test_cook_decrements_instead_of_deleting()
+        test_register_cooked_meal_backdated()
 
         # DII
         test_dii_full_lifecycle()

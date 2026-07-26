@@ -509,18 +509,36 @@ def test_tuning_compute_rewards_single_dish():
 
 
 def test_tuning_compute_rewards_top_rank():
-    print("\n-- tuning.compute_rewards (top rank -> 1.0) --")
-    top = Dish(name="top dish")
-    top.ingredients = {"a": True}
-    low = Dish(name="low dish")
-    low.ingredients = {"b": True, "x": False}
-    dishes = [top, low]
-    fridge = {"a", "b"}  # optional x absent -> low dish scores strictly lower
-    days = {"top dish": 14, "low dish": 2}
-    rewards = tuning.compute_rewards("top dish", dishes, fridge, days, tuning.CANDIDATES)
-    check("returns a reward dict", rewards is not None)
-    check("winning candidate gets reward 1.0",
-          abs(rewards[tuning._key(0.60)] - 1.0) < 1e-9, f"got {rewards}")
+    print("\n-- tuning.compute_rewards (w-dependent ranking -> signal) --")
+    # 'old dish' has no optionals but maximum recency; 'fresh dish' has three
+    # optionals in stock but was cooked recently. Low w favours the first, high w
+    # the second, so the reward vector varies across candidates.
+    old = Dish(name="old dish", ingredients={"a": True})
+    fresh = Dish(name="fresh dish", ingredients={
+        "b": True, "o1": False, "o2": False, "o3": False,
+    })
+    dishes = [old, fresh]
+    fridge = {"a", "b", "o1", "o2", "o3"}
+    days = {"old dish": 14, "fresh dish": 3}
+
+    rewards = tuning.compute_rewards("old dish", dishes, fridge, days, tuning.CANDIDATES)
+    check("returns a reward dict", rewards is not None, f"got {rewards}")
+    spread = max(rewards.values()) - min(rewards.values())
+    check("reward discriminates between candidates", spread > 0.5, f"spread {spread}")
+    check("the low-w candidate ranks it top",
+          abs(rewards[tuning._key(0.40)] - 1.0) < 1e-9, f"got {rewards}")
+
+
+def test_tuning_compute_rewards_uniform_skipped():
+    print("\n-- tuning.compute_rewards (uniform reward skipped) --")
+    # Neither dish declares optionals, so the match term is identical and the
+    # ordering is recency-driven and weight-independent: no signal about w.
+    a = Dish(name="dish a", ingredients={"a": True})
+    b = Dish(name="dish b", ingredients={"b": True})
+    rewards = tuning.compute_rewards(
+        "dish a", [a, b], {"a", "b"}, {"dish a": 14, "dish b": 3}, tuning.CANDIDATES
+    )
+    check("weight-independent ranking yields no signal", rewards is None, f"got {rewards}")
 
 
 def test_tuning_apply_update_pure():
@@ -664,9 +682,13 @@ def test_tuning_compute_rewards_no_signal():
         "rice bowl", dishes, fridge, {"rice bowl": 0}, tuning.CANDIDATES
     )
     check("cooldown-zeroed cook yields no signal (None)", rewards is None, f"got {rewards}")
-    # Sanity contrast: a normal cook does produce a reward dict.
+    # Sanity contrast: a normal cook does produce a reward dict. 'pasta' needs
+    # optionals in stock, otherwise both dishes have an identical match term and
+    # the ranking is weight-independent — which the uniform-reward guard skips.
+    b.ingredients = {"noodles": True, "sauce": False, "basil": False, "cheese": False}
     rewards2 = tuning.compute_rewards(
-        "rice bowl", dishes, fridge, {"rice bowl": 14, "pasta": 3}, tuning.CANDIDATES
+        "rice bowl", dishes, fridge | {"sauce", "basil", "cheese"},
+        {"rice bowl": 14, "pasta": 3}, tuning.CANDIDATES
     )
     check("normal cook produces rewards", isinstance(rewards2, dict) and len(rewards2) > 0)
 
@@ -720,6 +742,7 @@ def main():
     test_tuning_compute_rewards_not_cookable()
     test_tuning_compute_rewards_single_dish()
     test_tuning_compute_rewards_top_rank()
+    test_tuning_compute_rewards_uniform_skipped()
     test_tuning_compute_rewards_no_signal()
     test_tuning_apply_update_pure()
     test_tuning_cold_start()
