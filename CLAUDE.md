@@ -23,7 +23,7 @@ python3 test_integration.py
 python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path('.').resolve().parent)); m = importlib.import_module('.src.handlers.get_meal_suggestions', pathlib.Path('.').resolve().name); print(m.HANDLER({}))"
 ```
 
-There is no build step or linter. `test_integration.py` and `test_unit.py` are plain Python scripts with assertions, not a pytest/unittest harness.
+There is no build step or linter. `test_integration.py` and `test_unit.py` are plain Python scripts with assertions, not a pytest/unittest harness. Both run in CI via `.github/workflows/tests.yml` (Python 3.12 on `ubuntu-latest`) for pushes to `main`, pull requests, and manual dispatch.
 
 ## Architecture
 

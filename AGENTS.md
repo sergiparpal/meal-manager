@@ -15,6 +15,7 @@ standard library and persists state in JSON files under `data/`.
 - No build step is configured.
 - No lint step is configured.
 - Tests are plain Python scripts with assertions, not a pytest/unittest harness.
+- CI (`.github/workflows/tests.yml`) runs both test scripts on push to `main`, on pull requests, and on manual dispatch. It is the only automated gate — there is nothing else for it to run.
 - Tools are auto-discovered: each module under `src/handlers/` exports `NAME`, `SCHEMA`, `HANDLER` and is picked up by `iter_tools()`. There is no central registry to keep in sync.
 - Relative imports are required inside the package.
 - Preserve the existing JSON data formats and tool names. The one exception on record: `fridge.json` migrated from a flat array of names to a `{name: count}` object (`null` = pantry staple, `0` = out of stock). The loader accepts both shapes and rewrites legacy files on the next save, so no other format may be changed without the same courtesy.
@@ -166,6 +167,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 - It intentionally exercises error cases and may print stack traces for expected failures.
 - For a single integration scenario, call `_setup_tmp_data` / `_teardown_tmp_data` around one `test_*` function.
 - Prefer the narrowest test that covers the changed code path.
+- `.github/workflows/tests.yml` runs `test_unit.py` then `test_integration.py` on Python 3.12 / `ubuntu-latest`. Both must exit zero, so a script that only *prints* a failure without asserting will pass CI — assert, don't print.
 
 ## Tool And Schema Notes
 

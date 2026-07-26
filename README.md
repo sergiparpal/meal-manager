@@ -195,6 +195,10 @@ This script creates a throw-away temp directory, points the repositories and DII
 
 For the fastest feedback on pure domain logic, run `python3 test_unit.py`. It covers the dataclass, scoring, shopping, weight-tuning, and ingredient-normalization helpers without touching `data/`.
 
+### Continuous Integration
+
+Both scripts also run in GitHub Actions ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) on every push to `main`, on every pull request, and on manual dispatch. The job checks out the repo on `ubuntu-latest`, sets up Python 3.12, and runs `test_unit.py` followed by `test_integration.py` — no dependency installation step, since there are none to install.
+
 ---
 
 ## Project Structure
@@ -251,6 +255,9 @@ meal-manager/
 │   ├── history.json           # Cooking history (dish name → last-cooked ISO date)
 │   ├── tuning.json            # (created lazily) Online-learner state for the suggestion blend
 │   └── sessions/              # (created lazily) DII session backups for crash recovery
+├── .github/
+│   └── workflows/
+│       └── tests.yml          # CI — runs both test scripts on push, PR, and manual dispatch
 ├── plugin.yaml                # Hermes plugin manifest (name + provided tools)
 ├── __init__.py                # Plugin entry point — register(ctx, *, data_dir=None)
 ├── test_unit.py               # Unit tests for domain logic modules
@@ -307,7 +314,7 @@ meal-manager/
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "candidates": [0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80],
   "S": {"0.60": 6.0, "...": "discounted reward sum per candidate"},
   "C": {"0.60": 10.0, "...": "discounted observation count per candidate"},
@@ -330,7 +337,7 @@ Contributions are welcome. To get started:
 1. Fork the repository.
 2. Create a feature branch (`git checkout -b feature/my-feature`).
 3. Make your changes and verify them with `python3 test_unit.py` and `python3 test_integration.py`.
-4. Commit your changes and open a Pull Request.
+4. Commit your changes and open a Pull Request. CI runs both scripts on the pull request automatically.
 
 Please ensure all ingredient and dish names follow the lowercase/stripped normalization convention used throughout the codebase.
 
