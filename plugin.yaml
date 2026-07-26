@@ -1,4 +1,5 @@
 name: meal_manager
+version: "0.1.0"
 description: Meal planning and fridge inventory manager for Hermes agents.
 
 provides_tools:

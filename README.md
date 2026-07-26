@@ -258,7 +258,7 @@ meal-manager/
 ├── .github/
 │   └── workflows/
 │       └── tests.yml          # CI — runs both test scripts on push, PR, and manual dispatch
-├── plugin.yaml                # Hermes plugin manifest (name + provided tools)
+├── plugin.yaml                # Hermes plugin manifest (name, version, provided tools)
 ├── __init__.py                # Plugin entry point — register(ctx, *, data_dir=None)
 ├── test_unit.py               # Unit tests for domain logic modules
 ├── test_integration.py        # Integration smoke test

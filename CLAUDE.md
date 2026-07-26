@@ -30,7 +30,7 @@ There is no build step or linter. `test_integration.py` and `test_unit.py` are p
 ### Plugin wiring layer (top-level files)
 
 - **`__init__.py`** — `register(ctx, *, data_dir=None)` walks `src/handlers/` via `iter_tools()` and registers each `(NAME, SCHEMA, HANDLER)` triple, then injects `skill.md` into the Hermes context. There is no central handler list to maintain — adding a new tool is a matter of dropping a new module into `src/handlers/`. If the host supplies a `data_dir`, `register` calls `src.repositories.configure(data_dir)` and `src.dii.configure(data_dir / "sessions")` so all persistence is redirected to that location.
-- **`plugin.yaml`** — Declares the plugin name (`meal_manager`) and lists provided tools (kept manually in sync with the modules under `src/handlers/`).
+- **`plugin.yaml`** — Declares the plugin name (`meal_manager`), its `version`, and lists provided tools (kept manually in sync with the modules under `src/handlers/`). `version` is a documented Hermes manifest field but nothing validates or consumes it, so it is declarative only — bump it in the same commit as the release tag or the two drift silently.
 - **`skill.md`** — LLM-facing instructions for when/how to invoke each tool. The DII section instructs the agent to drive ingredient selection via plain text conversation, interpreting free-text user responses to call the appropriate DII tool.
 
 ### Handlers (`src/handlers/`)
