@@ -17,7 +17,7 @@ standard library and persists state in JSON files under `data/`.
 - Tests are plain Python scripts with assertions, not a pytest/unittest harness.
 - Tools are auto-discovered: each module under `src/handlers/` exports `NAME`, `SCHEMA`, `HANDLER` and is picked up by `iter_tools()`. There is no central registry to keep in sync.
 - Relative imports are required inside the package.
-- Preserve the existing JSON data formats and tool names.
+- Preserve the existing JSON data formats and tool names. The one exception on record: `fridge.json` migrated from a flat array of names to a `{name: count}` object (`null` = pantry staple, `0` = out of stock). The loader accepts both shapes and rewrites legacy files on the next save, so no other format may be changed without the same courtesy.
 
 ## Core Commands
 
@@ -140,8 +140,10 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 - `True` means essential.
 - `False` means optional.
 - Dishes cooked fewer than 2 days ago are excluded from suggestions.
-- `register_cooked_meal` removes essential ingredients from the fridge after recording the meal.
-- Quick shopping suggestions only surface dishes missing exactly one essential ingredient.
+- Scoring never rewards essentials — they are a gate enforced by `can_cook_with`. The match term is the count of *optional* ingredients in stock, capped at `OPTIONAL_CAP`.
+- The fridge stores portion counts: `None` = pantry staple (unlimited), `0` = known out of stock, `n > 0` = roughly `n` dishes' worth.
+- `register_cooked_meal` consumes one portion of each essential ingredient after recording the meal; staples are untouched and counts floor at 0 rather than being deleted. It accepts an optional ISO `date` for backdated cooks, which skip the learning update.
+- Quick shopping suggestions surface dishes missing at most `max_missing` essential ingredients (default 1), ranked by how many dishes each ingredient unlocks before score.
 - DII sessions reveal suggestions one at a time through the probability funnel.
 - Removing an essential ingredient in a DII session should signal that recalculation is needed.
 

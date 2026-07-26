@@ -26,29 +26,53 @@ Read-only. Reports the current self-adjusted suggestion weights (availability vs
 
 ### `get_quick_shopping_list`
 
-Identifies individual ingredients that, when purchased, unlock new dishes. For each single missing essential ingredient it returns `missing_ingredient`, `unlocks_dishes` (a comma-separated list of every dish that ingredient unlocks), and the projected `score`.
+Identifies ingredients that, when purchased, unlock new dishes. Each row returns:
+
+- `missing_ingredient` — the item to buy.
+- `unlocks_dishes` — comma-separated list of every dish it unlocks.
+- `unlocks_count` — how many dishes that is. Results are ranked by this first, so the top row is the highest-leverage purchase.
+- `still_missing` — the size of the smallest basket that unlocks a dish through this ingredient. `1` means buying this item alone is enough; `2` or more means it is part of a multi-item basket and buying it by itself unlocks nothing yet. **Always tell the user which case they are in** — never present a multi-item unlock as a one-item unlock.
+- `score` — the projected suggestion score of the best dish it unlocks.
+
+Optional argument `max_missing` (1-5, default 1) sets how many essential ingredients a dish may be short of and still appear.
 
 - **When to use:**
   - The user says they're at the grocery store or going shopping.
   - The user asks "what should I buy?" or "what am I missing?".
   - The user wants to optimize their shopping to maximize possible dinners.
+- **Directive:** if the default call returns an empty list and the user is asking what to buy, retry once with `max_missing: 2` before reporting that there is nothing to suggest. An empty fridge has no single-ingredient unlocks, which is exactly when the user most needs an answer.
+
+### `get_missing_for_dish`
+
+Reports what one specific dish still needs. Returns `{dish, cookable, missing_essential, missing_optional}`. A dish is `cookable` when `missing_essential` is empty — missing optionals never block cooking, they only lower the score.
+
+- **When to use:**
+  - The user asks whether they can make a named dish ("can I make paella tonight?").
+  - The user asks what they would need to buy for a specific dish.
+  - Prefer this over scanning `get_meal_suggestions` when the user has already named the dish.
 
 ### `update_fridge_inventory`
 
-Adds or removes ingredients from the fridge. Accepts an action ("add" or "remove") and a list of ingredient names.
+Adds, removes, or sets fridge ingredients. The fridge tracks approximate **portion counts** — roughly how many dishes' worth of an ingredient is on hand, not grams. Accepts an action ("add", "remove", or "set") and either a list of names (one portion each) or an object mapping name -> count.
+
+A count of `null` marks a **pantry staple** — something that never runs out (salt, oil, spices). Staples are never decremented when a meal is cooked.
 
 - **When to use:**
-  - The user says they bought something -> action "add".
-  - The user says an ingredient has run out or been used up -> action "remove".
-  - The user lists what they have in the fridge and wants to update it.
+  - The user says they bought something -> action "add" (counts accumulate: adding 2 onions to 1 gives 3).
+  - The user says an ingredient is gone and they don't stock it -> action "remove" (deletes it entirely).
+  - The user lists what they have and wants to update it.
+- **Directive:** when the user corrects an estimate ("I actually have two onions left", "I've only got one portion of rice"), use `set`, not `add`. `set` overwrites the count outright — including to `0` for "I ran out" and to `null` for "this is a staple I always have". Using `add` here would compound the error rather than correct it.
 
 ### `register_cooked_meal`
 
-Registers that a dish was cooked today so the suggestion engine doesn't recommend it again too soon.
+Registers that a dish was cooked so the suggestion engine doesn't recommend it again too soon. Consumes **one portion** of each essential ingredient from the fridge rather than deleting it, so an ingredient the user had plenty of stays available. Pantry staples are left untouched.
+
+Optional argument `date` (ISO `YYYY-MM-DD`) records a meal cooked in the past; it defaults to today and cannot be in the future.
 
 - **When to use:**
   - The user says they cooked or are cooking a specific dish.
   - The user confirms they're going to prepare one of the suggested dishes.
+  - The user mentions a past meal ("I made lentils on Saturday") -> pass the matching `date`.
 
 ## Correction and management
 
@@ -62,7 +86,10 @@ Removes an entry from the cooking history. This is the "undo" for `register_cook
 
 ### `list_fridge`
 
-Returns the current fridge contents as a list of ingredients.
+Returns the current fridge contents as `{in_stock, out_of_stock}`:
+
+- `in_stock` — an object mapping ingredient -> portion count. A count of `null` means a pantry staple that never runs out.
+- `out_of_stock` — ingredients the user is known to have **run out of**, as opposed to ones they never had. Worth mentioning when the user is planning a shop, since these are things they normally keep.
 
 - **When to use:**
   - The user asks "what do I have in the fridge?" or "what ingredients do I have?".
