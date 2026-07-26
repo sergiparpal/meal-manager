@@ -45,7 +45,8 @@ def commit(
             fridge = fridge_repo.load()
             added_to_fridge = [ing for ing in all_ingredients if ing not in fridge]
             if added_to_fridge:
-                fridge.extend(added_to_fridge)
+                for ing in added_to_fridge:
+                    fridge[ing] = 1
                 fridge_repo.save(fridge)
             committed_fridge = bool(added_to_fridge)
 
@@ -74,7 +75,7 @@ def commit(
                 try:
                     remove = set(added_to_fridge)
                     fridge = fridge_repo.load()
-                    fridge_repo.save([ing for ing in fridge if ing not in remove])
+                    fridge_repo.save({k: v for k, v in fridge.items() if k not in remove})
                 except Exception:
                     logger.exception("finalize_session fridge rollback failed")
             raise

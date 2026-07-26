@@ -1,9 +1,9 @@
-"""Tool: update_fridge_inventory — add or remove fridge ingredients."""
+"""Tool: update_fridge_inventory — add, remove, or set fridge portion counts."""
 
 from ..repositories import fridge_repo
 from ._common import (
     MAX_FRIDGE_UPDATE,
-    normalize_ingredient_name,
+    normalize_ingredient_counts,
     require_arg,
     tool_handler,
 )
@@ -12,25 +12,40 @@ NAME = "update_fridge_inventory"
 
 SCHEMA = {
     "description": (
-        "Add or remove ingredients from the fridge inventory. Use when the "
-        "user mentions buying groceries, restocking, or when ingredients "
-        "have run out."
+        "Add, remove, or set ingredients in the fridge inventory. The fridge "
+        "tracks approximate portion counts — how many dishes' worth of an "
+        "ingredient is on hand. Use when the user mentions buying groceries, "
+        "restocking, running out, or correcting an estimate."
     ),
     "type": "object",
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["add", "remove"],
-            "description": "add or remove ingredients",
+            "enum": ["add", "remove", "set"],
+            "description": (
+                "'add' increases the portion count (creating the entry if new), "
+                "'remove' deletes the ingredient entirely, 'set' overwrites the "
+                "count — use 'set' to re-inventory after the estimates drift."
+            ),
         },
         "ingredients": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "list of ingredient names",
+            "description": (
+                "Either a list of names (each counts as one portion) or an "
+                "object mapping name -> portion count. Use null as the count to "
+                "mark a pantry staple that never runs out (salt, oil, spices)."
+            ),
+            "oneOf": [
+                {"type": "array", "items": {"type": "string"}},
+                {"type": "object"},
+            ],
         },
     },
     "required": ["action", "ingredients"],
 }
+
+
+def _fmt(value):
+    return "staple" if value is None else str(value)
 
 
 @tool_handler(NAME)
@@ -38,47 +53,56 @@ def HANDLER(args: dict, **kwargs):
     action = require_arg(args, "action")
     raw_items = require_arg(args, "ingredients")
 
-    if action not in ("add", "remove"):
-        raise ValueError(f"action must be 'add' or 'remove', got '{action}'")
-    if not isinstance(raw_items, list):
-        raise ValueError("ingredients must be an array")
-    if len(raw_items) > MAX_FRIDGE_UPDATE:
+    if action not in ("add", "remove", "set"):
+        raise ValueError(f"action must be 'add', 'remove' or 'set', got '{action}'")
+
+    counts = normalize_ingredient_counts(raw_items)
+    if len(counts) > MAX_FRIDGE_UPDATE:
         raise ValueError(f"Too many ingredients (max {MAX_FRIDGE_UPDATE})")
-
-    items = list(dict.fromkeys(normalize_ingredient_name(raw) for raw in raw_items))
-    if not items:
+    if not counts:
         return "No changes — no valid ingredients provided."
-
-    names = ", ".join(items)
 
     with fridge_repo.lock:
         fridge = fridge_repo.load()
 
-        if action == "add":
-            added = [ing for ing in items if ing not in fridge]
-            already = [ing for ing in items if ing in fridge]
-            if added:
-                fridge.extend(added)
-                fridge_repo.save(fridge)
-                if already:
-                    return (
-                        f"Added {', '.join(added)} to the fridge. "
-                        f"Already present: {', '.join(already)}."
-                    )
-                return f"Successfully added {', '.join(added)} to the fridge."
-            return f"No changes — {names} already in the fridge."
-
-        # action == "remove"
-        to_remove = set(items)
-        removed = [ing for ing in items if ing in fridge]
-        not_found = [ing for ing in items if ing not in fridge]
-        if removed:
-            fridge = [ing for ing in fridge if ing not in to_remove]
+        if action == "remove":
+            removed = [ing for ing in counts if ing in fridge]
+            not_found = [ing for ing in counts if ing not in fridge]
+            if not removed:
+                return f"No changes — {', '.join(counts)} not found in the fridge."
+            for ing in removed:
+                del fridge[ing]
             fridge_repo.save(fridge)
+            msg = f"Removed {', '.join(sorted(removed))} from the fridge."
             if not_found:
-                return (
-                    f"Removed {', '.join(removed)} from the fridge. "
-                    f"Not found: {', '.join(not_found)}."
-                )
-            return f"Successfully removed {', '.join(removed)} from the fridge."
-        return f"No changes — {names} not found in the fridge."
+                msg += f" Not found: {', '.join(sorted(not_found))}."
+            return msg
+
+        changes = []
+        unchanged = []
+        for ing, count in counts.items():
+            before = fridge.get(ing, 0)
+            if action == "set":
+                fridge[ing] = count
+            elif count is None:
+                fridge[ing] = None          # promote to pantry staple
+            elif fridge.get(ing, 0) is None:
+                unchanged.append(ing)       # already unlimited; nothing to add
+                continue
+            else:
+                fridge[ing] = before + count
+            changes.append((ing, before, fridge[ing]))
+
+        if changes:
+            fridge_repo.save(fridge)
+
+    if not changes:
+        return f"No changes — {', '.join(sorted(unchanged))} already a pantry staple."
+
+    detail = ", ".join(f"{ing} ({_fmt(before)} -> {_fmt(after)})"
+                       for ing, before, after in sorted(changes))
+    verb = "Set" if action == "set" else "Added"
+    msg = f"{verb} in the fridge: {detail}."
+    if unchanged:
+        msg += f" Already a pantry staple: {', '.join(sorted(unchanged))}."
+    return msg

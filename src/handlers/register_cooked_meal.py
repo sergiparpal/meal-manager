@@ -20,8 +20,8 @@ SCHEMA = {
     "description": (
         "Register that a specific dish was cooked today. Records it in the "
         "cooking history so the suggestion engine avoids recommending it "
-        "again too soon. Also auto-removes essential ingredients from the "
-        "fridge."
+        "again too soon. Also consumes one portion of each essential "
+        "ingredient from the fridge (pantry staples are left untouched)."
     ),
     "type": "object",
     "properties": {
@@ -58,12 +58,7 @@ def HANDLER(args: dict, **kwargs):
     essentials = [ing for ing, is_essential in dish.ingredients.items() if is_essential]
 
     try:
-        with fridge_repo.lock:
-            fridge = fridge_repo.load()
-            removed = [ing for ing in essentials if ing in fridge]
-            if removed:
-                fridge = [ing for ing in fridge if ing not in removed]
-                fridge_repo.save(fridge)
+        consumed = fridge_repo.consume(essentials)
     except Exception:
         try:
             history_repo.revert_entry(name, today_iso, previous_history)
@@ -86,5 +81,12 @@ def HANDLER(args: dict, **kwargs):
     except Exception:
         logger.exception("weight tuning update failed (non-critical)")
 
-    removed_msg = f" Removed from fridge: {', '.join(removed)}." if removed else ""
+    if consumed:
+        parts = []
+        for ing, before in sorted(consumed.items()):
+            after = max(0, before - 1)
+            parts.append(f"{ing} ({before} -> {after})")
+        removed_msg = f" Consumed from fridge: {', '.join(parts)}."
+    else:
+        removed_msg = ""
     return f"Registered '{dish.name}' as cooked on {today_iso}.{removed_msg}"

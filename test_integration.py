@@ -172,9 +172,14 @@ get_tuning_state = _load_handler("get_tuning_state")
 def test_list_fridge():
     print("\n-- list_fridge --")
     result = parse(list_fridge({}))
-    check("returns a list", isinstance(result, list))
-    check("contains seeded items", "arroz" in result and "patatas" in result)
-    check("has exactly 2 items", len(result) == 2, f"got {len(result)}")
+    check("returns the in_stock/out_of_stock shape",
+          set(result) == {"in_stock", "out_of_stock"}, f"got {result}")
+    in_stock = result["in_stock"]
+    check("contains seeded items", "arroz" in in_stock and "patatas" in in_stock)
+    check("has exactly 2 items", len(in_stock) == 2, f"got {in_stock}")
+    check("legacy list seeded one portion each",
+          in_stock == {"arroz": 1, "patatas": 1}, f"got {in_stock}")
+    check("nothing out of stock yet", result["out_of_stock"] == [], f"got {result}")
 
 
 def test_update_fridge_add():
@@ -182,16 +187,77 @@ def test_update_fridge_add():
     result = parse(update_fridge_inventory({"action": "add", "ingredients": ["pollo", "huevos"]}))
     check("returns success string", isinstance(result, str) and "error" not in result.lower())
 
-    fridge = parse(list_fridge({}))
-    check("pollo added", "pollo" in fridge)
-    check("huevos added", "huevos" in fridge)
+    fridge = parse(list_fridge({}))["in_stock"]
+    check("pollo added", fridge.get("pollo") == 1, f"got {fridge}")
+    check("huevos added", fridge.get("huevos") == 1, f"got {fridge}")
     check("originals preserved", "arroz" in fridge and "patatas" in fridge)
 
 
 def test_update_fridge_add_duplicate():
     print("\n-- update_fridge_inventory (add duplicate) --")
     result = parse(update_fridge_inventory({"action": "add", "ingredients": ["pollo"]}))
-    check("no-op for duplicates", isinstance(result, str) and "no change" in result.lower())
+    check("returns success string", isinstance(result, str) and "error" not in result.lower(),
+          f"got {result}")
+    # Adding an ingredient already present now accumulates portions rather than
+    # being a no-op — one more pollo means one more dish's worth.
+    fridge = parse(list_fridge({}))["in_stock"]
+    check("adding again accumulates portions", fridge.get("pollo") == 2, f"got {fridge}")
+    # Put it back to one portion so the tests that follow see the historical state.
+    update_fridge_inventory({"action": "set", "ingredients": {"pollo": 1}})
+    check("set restores one portion",
+          parse(list_fridge({}))["in_stock"].get("pollo") == 1)
+
+
+def test_fridge_legacy_list_migrates():
+    print("\n-- fridge (legacy list migrates to counts) --")
+    fridge = _repos_mod.fridge_repo.load()
+    check("legacy list loads as a dict", isinstance(fridge, dict), f"got {fridge}")
+    check("each legacy name becomes one portion",
+          fridge.get("arroz") == 1 and fridge.get("patatas") == 1, f"got {fridge}")
+
+
+def test_fridge_counts_and_staples():
+    print("\n-- fridge (counts, staples, set) --")
+    update_fridge_inventory({"action": "add", "ingredients": {"cebolla": 3}})
+    check("count is stored", _repos_mod.fridge_repo.load().get("cebolla") == 3)
+
+    update_fridge_inventory({"action": "add", "ingredients": {"cebolla": 2}})
+    check("add accumulates", _repos_mod.fridge_repo.load().get("cebolla") == 5)
+
+    update_fridge_inventory({"action": "set", "ingredients": {"cebolla": 1}})
+    check("set overwrites", _repos_mod.fridge_repo.load().get("cebolla") == 1)
+
+    # 'pimenton' rather than 'sal': the DII tests below commit 'sal' to the
+    # fridge and assert it was a fresh addition.
+    update_fridge_inventory({"action": "add", "ingredients": {"pimenton": None}})
+    check("null marks a staple", _repos_mod.fridge_repo.load().get("pimenton") is None)
+    update_fridge_inventory({"action": "add", "ingredients": {"pimenton": 5}})
+    check("adding to a staple is a no-op",
+          _repos_mod.fridge_repo.load().get("pimenton") is None)
+
+    bad = parse(update_fridge_inventory({"action": "add", "ingredients": {"x": -1}}))
+    check("rejects negative counts", "error" in bad, f"got {bad}")
+
+
+def test_cook_decrements_instead_of_deleting():
+    print("\n-- register_cooked_meal (decrements) --")
+    add_dish({"name": "Count Dish", "ingredients": {"cnt_a": True, "cnt_b": True}})
+    update_fridge_inventory({"action": "set",
+                             "ingredients": {"cnt_a": 3, "cnt_b": None}})
+
+    register_cooked_meal({"dish_name": "Count Dish"})
+    fridge = _repos_mod.fridge_repo.load()
+    check("essential is decremented, not deleted", fridge.get("cnt_a") == 2, f"got {fridge}")
+    check("staple is untouched", fridge.get("cnt_b") is None, f"got {fridge}")
+    check("still cookable after one cook", "cnt_a" in _repos_mod.fridge_repo.load_set())
+
+    # Drain it and confirm the zero entry is kept and excluded from availability.
+    update_fridge_inventory({"action": "set", "ingredients": {"cnt_a": 1}})
+    _repos_mod.history_repo.remove_entry("count dish")
+    register_cooked_meal({"dish_name": "Count Dish"})
+    check("count floors at zero", _repos_mod.fridge_repo.load().get("cnt_a") == 0)
+    check("zero-count entry is not available",
+          "cnt_a" not in _repos_mod.fridge_repo.load_set())
 
 
 def test_update_fridge_remove():
@@ -200,7 +266,9 @@ def test_update_fridge_remove():
     check("returns success string", isinstance(result, str) and "removed" in result.lower())
 
     fridge = parse(list_fridge({}))
-    check("huevos removed", "huevos" not in fridge)
+    check("huevos removed", "huevos" not in fridge["in_stock"], f"got {fridge}")
+    check("remove deletes outright rather than zeroing",
+          "huevos" not in fridge["out_of_stock"], f"got {fridge}")
 
 
 def test_get_meal_suggestions():
@@ -256,8 +324,15 @@ def test_register_cooked_meal():
     result = parse(register_cooked_meal({"dish_name": "arroz con pollo"}))
     check("success message", isinstance(result, str) and "registered" in result.lower(),
           f"got: {result}")
-    check("removes essentials from fridge",
-          "arroz" not in parse(list_fridge({})) and "pollo" not in parse(list_fridge({})))
+    fridge = parse(list_fridge({}))
+    # Both essentials were at one portion, so cooking drains them to zero: they
+    # leave in_stock but are remembered as run-out rather than deleted.
+    check("consumes essentials from fridge",
+          "arroz" not in fridge["in_stock"] and "pollo" not in fridge["in_stock"],
+          f"got {fridge}")
+    check("drained essentials are remembered as out of stock",
+          "arroz" in fridge["out_of_stock"] and "pollo" in fridge["out_of_stock"],
+          f"got {fridge}")
 
 
 def test_register_cooked_meal_bogus():
@@ -416,7 +491,8 @@ def test_clear_fridge():
     check("success message", isinstance(result, str) and "cleared" in result.lower(), f"got: {result}")
 
     fridge = parse(list_fridge({}))
-    check("fridge is empty", len(fridge) == 0, f"got {fridge}")
+    check("fridge is empty",
+          not fridge["in_stock"] and not fridge["out_of_stock"], f"got {fridge}")
 
 
 def test_clear_fridge_already_empty():
@@ -503,10 +579,11 @@ def test_dii_full_lifecycle():
     check("committed to fridge", state["committed_to_fridge"] is True)
 
     # Verify fridge got the ingredients
-    fridge = parse(list_fridge({}))
-    check("harina in fridge after finalize", "harina" in fridge)
-    check("tomate in fridge after finalize", "tomate" in fridge)
-    check("queso de cabra in fridge after finalize", "queso de cabra" in fridge)
+    fridge = parse(list_fridge({}))["in_stock"]
+    check("harina in fridge after finalize", fridge.get("harina") == 1, f"got {fridge}")
+    check("tomate in fridge after finalize", fridge.get("tomate") == 1, f"got {fridge}")
+    check("queso de cabra in fridge after finalize",
+          fridge.get("queso de cabra") == 1, f"got {fridge}")
 
 
 def test_dii_clear_all():
@@ -817,8 +894,10 @@ def main():
     _setup_tmp_data()
     try:
         test_list_fridge()
-        # Runs against the untouched seed fridge: the fridge tests below add
-        # 'pollo', which would make Arroz con Pollo cookable.
+        # These two run against the untouched seed fridge: the fridge tests
+        # below add 'pollo', which would make Arroz con Pollo cookable, and
+        # would also overwrite the legacy list-shaped fixture file.
+        test_fridge_legacy_list_migrates()
         test_get_missing_for_dish()
         test_update_fridge_add()
         test_update_fridge_add_duplicate()
@@ -842,6 +921,11 @@ def main():
         test_add_dishes_batch()
         test_clear_fridge()
         test_clear_fridge_already_empty()
+
+        # Portion counts. These run on the emptied fridge and set up their own
+        # state, so they cannot perturb the assertions above.
+        test_fridge_counts_and_staples()
+        test_cook_decrements_instead_of_deleting()
 
         # DII
         test_dii_full_lifecycle()

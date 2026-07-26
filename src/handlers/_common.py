@@ -133,6 +133,41 @@ def normalize_ingredients(ingredients) -> dict:
     return result
 
 
+MAX_PORTION_COUNT = 99
+
+
+def normalize_ingredient_counts(ingredients) -> dict:
+    """Accept ``["a", "b"]`` or ``{"a": 3, "salt": None}`` -> ``{name: count}``.
+
+    A bare list means one portion each. ``None`` marks a pantry staple. Mirrors
+    ``normalize_ingredients`` so both argument styles behave identically across
+    the tool surface.
+    """
+    ingredients = maybe_parse_json_arg(ingredients)
+    if isinstance(ingredients, str):
+        raise ValueError(f"Cannot parse ingredients string: {ingredients!r}")
+    if isinstance(ingredients, list):
+        return {normalize_ingredient_name(ing): 1 for ing in ingredients}
+    if not isinstance(ingredients, dict):
+        raise ValueError(
+            f"ingredients must be a dict or list, got {type(ingredients).__name__}"
+        )
+    result: dict = {}
+    for raw_name, raw_count in ingredients.items():
+        name = normalize_ingredient_name(raw_name)
+        if raw_count is None:
+            result[name] = None
+            continue
+        if isinstance(raw_count, bool) or not isinstance(raw_count, int):
+            raise ValueError(f"count for '{raw_name}' must be an integer or null")
+        if not 0 <= raw_count <= MAX_PORTION_COUNT:
+            raise ValueError(
+                f"count for '{raw_name}' must be between 0 and {MAX_PORTION_COUNT}"
+            )
+        result[name] = raw_count
+    return result
+
+
 def days_since_last_cook() -> dict[str, int]:
     """Build a mapping of dish name -> days since it was last cooked."""
     history = history_repo.load()

@@ -25,6 +25,7 @@ _suggestion_mod = importlib.import_module(".src.suggestion", _PLUGIN_DIR.name)
 _shopping_mod = importlib.import_module(".src.shopping", _PLUGIN_DIR.name)
 _tuning_mod = importlib.import_module(".src.tuning", _PLUGIN_DIR.name)
 _handlers_common = importlib.import_module(".src.handlers._common", _PLUGIN_DIR.name)
+_repos_mod = importlib.import_module(".src.repositories", _PLUGIN_DIR.name)
 
 Dish = _dish_mod.Dish
 calculate_score = _suggestion_mod.calculate_score
@@ -384,6 +385,36 @@ def test_suggest_quick_shopping_ranks_by_reach():
 
 
 # ---------------------------------------------------------------------------
+# Fridge repository tests
+# ---------------------------------------------------------------------------
+
+
+def test_fridge_repository_counts():
+    print("\n-- JsonFridgeRepository (counts) --")
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_fridge_"))
+    try:
+        repo = _repos_mod.JsonFridgeRepository(tmp / "fridge.json")
+        repo.save({"onion": 2, "salt": None, "gone": 0})
+
+        check("load round-trips counts", repo.load() == {"onion": 2, "salt": None, "gone": 0})
+        check("load_set excludes zero counts", repo.load_set() == {"onion", "salt"})
+
+        previous = repo.consume(["onion", "salt", "gone", "absent"])
+        check("consume reports only what changed", previous == {"onion": 2}, f"got {previous}")
+        check("onion decremented", repo.load()["onion"] == 1)
+        check("staple untouched", repo.load()["salt"] is None)
+        check("zero stays zero", repo.load()["gone"] == 0)
+
+        repo.restore_counts(previous)
+        check("restore_counts rolls back", repo.load()["onion"] == 2)
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # _normalize_ingredients tests
 # ---------------------------------------------------------------------------
 
@@ -670,6 +701,8 @@ def main():
     test_suggest_quick_shopping_groups_by_ingredient()
     test_suggest_quick_shopping_max_missing()
     test_suggest_quick_shopping_ranks_by_reach()
+
+    test_fridge_repository_counts()
 
     test_normalize_ingredients_dict()
     test_normalize_ingredients_list()

@@ -21,7 +21,7 @@ def HANDLER(args: dict, **kwargs):
     with fridge_repo.lock:
         fridge = fridge_repo.load()
         count = len(fridge)
-        fridge_repo.save([])
+        fridge_repo.save({})
 
     if count == 0:
         return "The fridge was already empty."
