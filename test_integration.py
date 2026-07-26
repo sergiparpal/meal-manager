@@ -144,6 +144,7 @@ def _load_handler(module_suffix: str):
 
 get_meal_suggestions = _load_handler("get_meal_suggestions")
 get_quick_shopping_list = _load_handler("get_quick_shopping_list")
+get_missing_for_dish = _load_handler("get_missing_for_dish")
 update_fridge_inventory = _load_handler("update_fridge_inventory")
 register_cooked_meal = _load_handler("register_cooked_meal")
 delete_history_entry = _load_handler("delete_history_entry")
@@ -222,6 +223,32 @@ def test_get_quick_shopping_list():
     check("huevos unlocks tortilla",
           any(s["missing_ingredient"] == "huevos" for s in result),
           f"got {result}")
+
+
+def test_get_quick_shopping_list_max_missing():
+    print("\n-- get_quick_shopping_list (max_missing) --")
+    result = parse(get_quick_shopping_list({"max_missing": 2}))
+    check("returns a list", isinstance(result, list), f"got {result}")
+    check("rows carry the new fields",
+          all({"missing_ingredient", "unlocks_dishes", "unlocks_count",
+               "still_missing", "score"} == set(r.keys()) for r in result),
+          f"got {result}")
+    bad = parse(get_quick_shopping_list({"max_missing": 0}))
+    check("rejects out-of-range threshold", "error" in bad, f"got {bad}")
+    bad2 = parse(get_quick_shopping_list({"max_missing": "two"}))
+    check("rejects non-integer threshold", "error" in bad2, f"got {bad2}")
+
+
+def test_get_missing_for_dish():
+    print("\n-- get_missing_for_dish --")
+    result = parse(get_missing_for_dish({"dish_name": "Arroz con Pollo"}))
+    check("reports the dish", result.get("dish") == "arroz con pollo", f"got {result}")
+    check("pollo is missing", "pollo" in result.get("missing_essential", []), f"got {result}")
+    check("pimientos is a missing optional",
+          "pimientos" in result.get("missing_optional", []), f"got {result}")
+    check("not cookable", result.get("cookable") is False, f"got {result}")
+    bogus = parse(get_missing_for_dish({"dish_name": "no such dish"}))
+    check("unknown dish errors", "error" in bogus, f"got {bogus}")
 
 
 def test_register_cooked_meal():
@@ -790,11 +817,15 @@ def main():
     _setup_tmp_data()
     try:
         test_list_fridge()
+        # Runs against the untouched seed fridge: the fridge tests below add
+        # 'pollo', which would make Arroz con Pollo cookable.
+        test_get_missing_for_dish()
         test_update_fridge_add()
         test_update_fridge_add_duplicate()
         test_update_fridge_remove()
         test_get_meal_suggestions()
         test_get_quick_shopping_list()
+        test_get_quick_shopping_list_max_missing()
         test_register_cooked_meal()
         test_register_cooked_meal_bogus()
         test_register_cooked_meal_rollback()

@@ -352,6 +352,37 @@ def test_suggest_quick_shopping_groups_by_ingredient():
     check("ingredient is eggs", result[0][0] == "eggs")
 
 
+def test_suggest_quick_shopping_max_missing():
+    print("\n-- suggest_quick_shopping (max_missing) --")
+    d = Dish(name="stew", ingredients={"beef": True, "potato": True, "carrot": True})
+    # Nothing in the fridge: two-away and three-away dishes are invisible at the
+    # default threshold, which is exactly the empty-fridge blind spot.
+    check("default threshold stays single-unlock",
+          suggest_quick_shopping([d], set(), {}) == [])
+    check("threshold 2 still excludes a three-away dish",
+          suggest_quick_shopping([d], set(), {}, max_missing=2) == [])
+    result = suggest_quick_shopping([d], set(), {}, max_missing=3)
+    check("threshold 3 surfaces the dish", len(result) == 3, f"got {result}")
+    check("every missing essential is credited",
+          {row[0] for row in result} == {"beef", "potato", "carrot"}, f"got {result}")
+    check("still_missing reports the basket size",
+          all(row[4] == 3 for row in result), f"got {result}")
+
+
+def test_suggest_quick_shopping_ranks_by_reach():
+    print("\n-- suggest_quick_shopping (ranks by reach) --")
+    # 'shared' unlocks two dishes; 'solo' unlocks one. Reach must win.
+    a = Dish(name="dish a", ingredients={"have": True, "shared": True})
+    b = Dish(name="dish b", ingredients={"have": True, "shared": True, "extra": False})
+    c = Dish(name="dish c", ingredients={"have": True, "solo": True, "o1": False,
+                                         "o2": False, "o3": False})
+    fridge = {"have", "extra", "o1", "o2", "o3"}
+    result = suggest_quick_shopping([a, b, c], fridge, {})
+    check("highest-reach ingredient ranks first",
+          result[0][0] == "shared", f"got {result}")
+    check("reach count is reported", result[0][3] == 2, f"got {result}")
+
+
 # ---------------------------------------------------------------------------
 # _normalize_ingredients tests
 # ---------------------------------------------------------------------------
@@ -637,6 +668,8 @@ def main():
     test_suggest_quick_shopping_basic()
     test_suggest_quick_shopping_two_missing()
     test_suggest_quick_shopping_groups_by_ingredient()
+    test_suggest_quick_shopping_max_missing()
+    test_suggest_quick_shopping_ranks_by_reach()
 
     test_normalize_ingredients_dict()
     test_normalize_ingredients_list()
