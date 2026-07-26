@@ -19,6 +19,12 @@ venv/
 # Claude Code
 .claude/
 
+# Knowledge-graph tooling artifacts (burgess plugin)
+.kg-session-lock
+.kg-reconcile-state.json
+.kg-ground-audit.jsonl*
+.tmp-*
+
 # OS
 .DS_Store
 Thumbs.db
