@@ -14,8 +14,11 @@ is just dropping a new module into this directory.
 """
 
 import importlib
+import logging
 import pkgutil
-from typing import Callable, Iterator
+from collections.abc import Callable, Iterator
+
+logger = logging.getLogger(__name__)
 
 Tool = tuple[str, dict, Callable[..., str]]
 
@@ -34,7 +37,14 @@ def iter_tools() -> Iterator[Tool]:
             name = module.NAME
             schema = module.SCHEMA
             handler = module.HANDLER
-        except AttributeError:
+        except AttributeError as exc:
+            # Silently dropping the module would unregister a tool that
+            # plugin.yaml still advertises, with nothing to point at.
+            logger.warning(
+                "Skipping handler module %r: missing NAME/SCHEMA/HANDLER (%s)",
+                info.name,
+                exc,
+            )
             continue
         yield name, schema, handler
 

@@ -20,8 +20,14 @@ def commit(
     commit_to_dish: bool,
     dish_repo: DishRepository,
     fridge_repo: FridgeRepository,
-) -> tuple[bool, bool]:
-    """Apply commit policy and return ``(committed_fridge, committed_dish)``.
+) -> tuple[bool, bool, int]:
+    """Apply commit policy, returning ``(fridge, dish, items_added_to_fridge)``.
+
+    ``committed_fridge`` reports whether the fridge commit was carried out, not
+    whether it happened to change anything: a session whose ingredients were all
+    already stocked has been committed just as fully as one that added three,
+    and reporting False there reads as a failure. The count carries the "how
+    much actually changed" signal instead.
 
     On a dish-write failure, rolls back only the items this call appended to
     the fridge — never clobbers concurrent writers.
@@ -48,7 +54,7 @@ def commit(
                 for ing in added_to_fridge:
                     fridge[ing] = 1
                 fridge_repo.save(fridge)
-            committed_fridge = bool(added_to_fridge)
+        committed_fridge = bool(commit_to_fridge and all_ingredients)
 
         try:
             # An empty selection would wipe an existing recipe to zero
@@ -80,4 +86,4 @@ def commit(
                     logger.exception("finalize_session fridge rollback failed")
             raise
 
-    return committed_fridge, committed_dish
+    return committed_fridge, committed_dish, len(added_to_fridge)

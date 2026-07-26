@@ -6,6 +6,7 @@ shared repository singletons so this layer never touches files directly.
 """
 
 import logging
+from contextlib import contextmanager
 from pathlib import Path
 
 from ..repositories import dish_repo, fridge_repo
@@ -63,6 +64,20 @@ def _require_active_session(session_id: str) -> DIISession:
     return session
 
 
+@contextmanager
+def _locked(session_id: str, *, active_only: bool = False):
+    """Validate, lock, then re-validate a session, yielding the live object.
+
+    Validating before taking the lock keeps a bad id from reaching the lock map
+    at all; re-validating inside is what actually guarantees the session is
+    still live and unfinalized for the whole mutation.
+    """
+    require = _require_active_session if active_only else _require_session
+    require(session_id)
+    with _store.session_lock(session_id):
+        yield require(session_id)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -87,19 +102,13 @@ def create_session(
 
 def get_session_state(session_id: str) -> dict:
     """Return public session state as a JSON-serializable dict."""
-    # Validate first so we don't create a per-session lock for a non-existent
-    # id (otherwise the lock map accumulates orphan entries).
-    _require_session(session_id)
-    with _store.get_lock(session_id):
-        session = _require_session(session_id)
+    with _locked(session_id) as session:
         return _to_response(session)
 
 
 def add_suggested_ingredient(session_id: str) -> dict:
     """Accept the current suggestion and advance the queue."""
-    _require_active_session(session_id)
-    with _store.get_lock(session_id):
-        session = _require_active_session(session_id)
+    with _locked(session_id, active_only=True) as session:
         if not engine.add_suggested(session):
             resp = _to_response(session)
             resp["no_change"] = True
@@ -110,9 +119,7 @@ def add_suggested_ingredient(session_id: str) -> dict:
 
 def skip_suggested_ingredient(session_id: str) -> dict:
     """Skip the current suggestion without adding it."""
-    _require_active_session(session_id)
-    with _store.get_lock(session_id):
-        session = _require_active_session(session_id)
+    with _locked(session_id, active_only=True) as session:
         engine.skip_suggested(session)
         _store.persist(session)
         return _to_response(session)
@@ -120,9 +127,7 @@ def skip_suggested_ingredient(session_id: str) -> dict:
 
 def remove_ingredient(session_id: str, ingredient: str) -> dict:
     """Remove an ingredient. Signals recalculation if it was essential."""
-    _require_session(session_id)
-    with _store.get_lock(session_id):
-        session = _require_session(session_id)
+    with _locked(session_id) as session:
         changed, recalc = engine.remove(session, ingredient)
         if not changed:
             resp = _to_response(session)
@@ -138,25 +143,15 @@ def add_manual_ingredient(
     is_essential: bool = True,
 ) -> dict:
     """Add a user-typed ingredient not from the funnel."""
-    _require_session(session_id)
-    with _store.get_lock(session_id):
-        session = _require_session(session_id)
-        changed, err = engine.add_manual(session, ingredient, is_essential)
-        if not changed:
-            resp = _to_response(session)
-            resp["no_change"] = True
-            if err:
-                resp["error"] = err
-            return resp
+    with _locked(session_id) as session:
+        engine.add_manual(session, ingredient, is_essential)
         _store.persist(session)
         return _to_response(session)
 
 
 def clear_all_ingredients(session_id: str) -> dict:
     """Remove all selected ingredients. Signals recalculation."""
-    _require_session(session_id)
-    with _store.get_lock(session_id):
-        session = _require_session(session_id)
+    with _locked(session_id) as session:
         cleared = engine.clear_all(session)
         _store.persist(session)
         return _to_response(session, recalculation_needed=cleared)
@@ -175,7 +170,7 @@ def finalize_session(
 
     if _store.get(session_id) is None:
         raise ValueError(f"Session not found or expired: {session_id}")
-    with _store.get_lock(session_id):
+    with _store.session_lock(session_id):
         session = _store.get(session_id)
         if session is None:
             raise ValueError(f"Session not found or expired: {session_id}")
@@ -190,7 +185,7 @@ def finalize_session(
             session.essential_ingredients or session.optional_ingredients
         )
 
-        committed_fridge, committed_dish = _commit(
+        committed_fridge, committed_dish, fridge_items_added = _commit(
             session,
             commit_to_fridge=commit_to_fridge,
             commit_to_dish=commit_to_dish,
@@ -203,6 +198,7 @@ def finalize_session(
         resp = _to_response(session)
         resp["committed_to_fridge"] = committed_fridge
         resp["committed_to_dish"] = committed_dish
+        resp["fridge_items_added"] = fridge_items_added
         if commit_to_dish and not committed_dish and not has_selection:
             resp["warning"] = (
                 "No ingredients were selected; the dish catalog was not modified."

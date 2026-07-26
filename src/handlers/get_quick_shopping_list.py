@@ -12,10 +12,13 @@ SCHEMA = {
         "Get a smart shopping list of ingredients that would unlock new dishes. "
         "For each dish missing at most 'max_missing' essential ingredients, "
         "returns {missing_ingredient, unlocks_dishes, unlocks_count, "
-        "still_missing, score} sorted by how many dishes the ingredient unlocks, "
-        "then by projected score. 'still_missing' is the size of the smallest "
+        "still_missing, score}. 'still_missing' is the size of the smallest "
         "basket that unlocks a dish through this ingredient — 1 means buying it "
-        "alone is enough. An empty list means no unlocks at that threshold."
+        "alone is enough. Rows are sorted by that basket size first, so genuine "
+        "one-item unlocks lead, then by how many dishes name the ingredient, "
+        "then by projected score. 'score' describes the cheapest unlock, not the "
+        "best-scoring dish at any basket size. An empty list means no unlocks at "
+        "that threshold."
     ),
     "type": "object",
     "properties": {

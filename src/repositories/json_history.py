@@ -8,6 +8,18 @@ from pathlib import Path
 from .. import atomic_write_json
 
 
+def _is_later(candidate: str, reference: str) -> bool:
+    """True when *candidate* is a strictly later date than *reference*.
+
+    False on any parse failure, so an unreadable stored value never blocks a
+    write — a corrupt entry should be replaced, not defended.
+    """
+    try:
+        return date.fromisoformat(candidate) > date.fromisoformat(reference)
+    except (TypeError, ValueError):
+        return False
+
+
 class JsonHistoryRepository:
     """Stores cooking history as ``{dish_name: ISO_date_string}`` in JSON.
 
@@ -48,13 +60,33 @@ class JsonHistoryRepository:
                 continue
         return normalized
 
-    def set_entry(self, dish_name: str, date_str: str) -> str | None:
-        """Store or replace a history entry. Returns the previous value (or None)."""
+    def set_entry(
+        self,
+        dish_name: str,
+        date_str: str,
+        *,
+        only_if_newer: bool = False,
+    ) -> str | None:
+        """Store or replace a history entry. Returns the previous value (or None).
+
+        History keeps a single date per dish — the last time it was cooked — so
+        a plain write is destructive when the incoming date is older than what
+        is already stored. With *only_if_newer*, a strictly more recent existing
+        entry is kept and no write happens: recording a forgotten meal from last
+        month must not erase a cook from this morning and hand the dish back to
+        the suggestion engine inside its cooldown window.
+
+        The previous value is returned either way. A caller rolling back with
+        :meth:`revert_entry` stays correct when the write was skipped, because
+        the stored value will not match the expected one.
+        """
         with self._lock:
             history = self.load()
             key = dish_name.strip().lower()
             previous = history.get(key)
             value = date_str if isinstance(date_str, str) else date_str.isoformat()
+            if only_if_newer and previous is not None and _is_later(previous, value):
+                return previous
             history[key] = value
             atomic_write_json(self.path, history)
             return previous

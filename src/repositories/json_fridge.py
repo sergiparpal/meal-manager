@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import threading
 from pathlib import Path
 
@@ -72,6 +73,16 @@ class JsonFridgeRepository:
             elif isinstance(raw_count, bool):
                 continue  # JSON true/false is not a count
             elif isinstance(raw_count, (int, float)):
+                # Python's json module accepts the non-standard NaN/Infinity
+                # literals, and both blow up int(): NaN raises ValueError,
+                # Infinity raises OverflowError. That happens outside the parse
+                # guard above, so without this check one hand-edited value turns
+                # every fridge-backed tool into an error envelope.
+                if isinstance(raw_count, float) and not math.isfinite(raw_count):
+                    logger.warning(
+                        "Ignoring non-finite count for %r in %s", name, self.path.name
+                    )
+                    continue
                 result[name] = max(0, int(raw_count))
             else:
                 logger.warning(

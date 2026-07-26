@@ -29,6 +29,7 @@ _repos_mod = importlib.import_module(".src.repositories", _PLUGIN_DIR.name)
 
 Dish = _dish_mod.Dish
 calculate_score = _suggestion_mod.calculate_score
+score_components = _suggestion_mod.score_components
 DEFAULT_TIME_WEIGHT = _suggestion_mod.DEFAULT_TIME_WEIGHT
 OPTIONAL_CAP = _suggestion_mod.OPTIONAL_CAP
 suggest_dishes = _suggestion_mod.suggest_dishes
@@ -370,6 +371,46 @@ def test_suggest_quick_shopping_max_missing():
           all(row[4] == 3 for row in result), f"got {result}")
 
 
+def test_suggest_quick_shopping_prefers_cheapest_basket():
+    print("\n-- suggest_quick_shopping (cheapest basket leads) --")
+    # 'flour' is named by three dishes that each need two MORE items, so buying
+    # it alone unlocks nothing. 'eggs' puts dinner on the table tonight. Reach
+    # alone would rank flour first and bury the answer the user actually wants.
+    dishes = [
+        Dish(name="cake", ingredients={"flour": True, "sugar": True, "butter": True}),
+        Dish(name="bread", ingredients={"flour": True, "yeast": True, "water": True}),
+        Dish(name="pastry", ingredients={"flour": True, "lard": True, "jam": True}),
+        Dish(name="omelette", ingredients={"eggs": True, "oil": True}),
+    ]
+    result = suggest_quick_shopping(dishes, {"oil"}, {}, max_missing=3)
+    check("true one-item unlock ranks first",
+          result[0][0] == "eggs" and result[0][4] == 1, f"got {result[:2]}")
+    check("higher-reach-but-useless ingredient ranks below it",
+          result[1][0] == "flour" and result[1][4] == 3, f"got {result[:2]}")
+    # Within one basket size, reach is still the tiebreaker.
+    by_basket_three = [row for row in result if row[4] == 3]
+    check("reach still leads within a basket size",
+          by_basket_three[0][0] == "flour", f"got {by_basket_three}")
+
+
+def test_suggest_quick_shopping_score_matches_cheapest_unlock():
+    print("\n-- suggest_quick_shopping (score describes the cheapest unlock) --")
+    # 'x' unlocks 'near' on its own (score 0.4) and 'far' as part of a 3-item
+    # basket (score 1.0). Reporting 1.0 next to still_missing=1 would promise a
+    # meal that basket cannot buy.
+    dishes = [
+        Dish(name="near", ingredients={"x": True, "have": True}),
+        Dish(name="far", ingredients={"x": True, "p": True, "q": True,
+                                      "o1": False, "o2": False, "o3": False}),
+    ]
+    result = suggest_quick_shopping(dishes, {"have", "o1", "o2", "o3"}, {}, max_missing=3)
+    row = next(r for r in result if r[0] == "x")
+    check("still_missing is the smallest basket", row[4] == 1, f"got {row}")
+    check("score belongs to that basket's dish, not the pricier one",
+          abs(row[2] - 0.4) < 1e-9, f"got {row}")
+    check("reach still counts every dish naming it", row[3] == 2, f"got {row}")
+
+
 def test_suggest_quick_shopping_ranks_by_reach():
     print("\n-- suggest_quick_shopping (ranks by reach) --")
     # 'shared' unlocks two dishes; 'solo' unlocks one. Reach must win.
@@ -414,9 +455,122 @@ def test_fridge_repository_counts():
         _shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_fridge_repository_non_finite_counts():
+    print("\n-- JsonFridgeRepository (non-finite counts) --")
+    # Python's json module accepts NaN/Infinity literals, and both explode in
+    # int() outside the loader's parse guard — NaN with ValueError, Infinity
+    # with OverflowError — taking every fridge-backed tool down with them.
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_nonfinite_"))
+    try:
+        repo = _repos_mod.JsonFridgeRepository(tmp / "fridge.json")
+        (tmp / "fridge.json").write_text(
+            '{"onion": 2, "bad": NaN, "worse": Infinity}', encoding="utf-8")
+        loaded = repo.load()
+        check("non-finite counts dropped, file still usable",
+              loaded == {"onion": 2}, f"got {loaded}")
+        check("load_set survives", repo.load_set() == {"onion"})
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_history_set_entry_only_if_newer():
+    print("\n-- JsonHistoryRepository.set_entry (only_if_newer) --")
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_history_"))
+    try:
+        repo = _repos_mod.JsonHistoryRepository(tmp / "history.json")
+        repo.set_entry("paella", "2026-07-26")
+
+        previous = repo.set_entry("paella", "2026-06-26", only_if_newer=True)
+        check("older date does not overwrite a newer entry",
+              repo.load()["paella"] == "2026-07-26", f"got {repo.load()}")
+        check("previous value still returned", previous == "2026-07-26")
+
+        repo.set_entry("paella", "2026-08-01", only_if_newer=True)
+        check("newer date does overwrite", repo.load()["paella"] == "2026-08-01")
+
+        # Rollback must stay correct when the write was skipped: the stored
+        # value never matched the expected one, so revert is a no-op.
+        repo.set_entry("stew", "2026-07-26")
+        repo.set_entry("stew", "2026-01-01", only_if_newer=True)
+        reverted = repo.revert_entry("stew", "2026-01-01", None)
+        check("revert of a skipped write is a no-op",
+              reverted is False and repo.load()["stew"] == "2026-07-26",
+              f"got {repo.load()}")
+
+        # A default (unflagged) write stays destructive — the repository
+        # primitive is unchanged for callers that want last-write-wins.
+        repo.set_entry("stew", "2020-01-01")
+        check("plain set_entry still overwrites", repo.load()["stew"] == "2020-01-01")
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 # _normalize_ingredients tests
 # ---------------------------------------------------------------------------
+
+
+def test_score_components_agree_with_calculate_score():
+    print("\n-- score_components (agrees with calculate_score) --")
+    dish = Dish(name="test", ingredients={"base": True, "a": False, "b": False})
+    fridge = {"base", "a"}
+    for days in (0, 1, 2, 7, 14, 30):
+        components = score_components(dish, fridge, days)
+        expected = calculate_score(dish, fridge, days, match_weight=0.7, time_weight=0.3)
+        if components is None:
+            check(f"gated day {days} scores 0", expected == 0, f"got {expected}")
+        else:
+            match, recency = components
+            blended = 0.7 * match + 0.3 * recency
+            check(f"day {days} blend matches", abs(blended - expected) < 1e-12,
+                  f"{blended} vs {expected}")
+    check("no-ingredient dish is gated",
+          score_components(Dish(name="bare"), fridge, 14) is None)
+
+
+def test_dish_rejects_colliding_ingredient_keys():
+    print("\n-- Dish: colliding ingredient keys rejected --")
+    # {"Rice": True, "rice": False} is a contradiction, not a duplicate:
+    # silently keeping one flag drops a declaration made on purpose.
+    try:
+        Dish(name="soup", ingredients={"Rice": True, "rice": False})
+        check("rejects contradictory colliding keys", False, "should have raised")
+    except ValueError:
+        check("rejects contradictory colliding keys", True)
+    # Loading from disk stays permissive so an existing catalog row with the
+    # same quirk is not dropped from the catalog entirely.
+    loaded = Dish.from_dict({"name": "soup", "ingredients": {"Rice": True, "rice": False}})
+    check("from_dict still loads legacy rows", loaded.ingredients == {"rice": False},
+          f"got {loaded.ingredients}")
+
+
+def test_normalize_ingredients_rejects_colliding_dict_keys():
+    print("\n-- normalize_ingredients: colliding dict keys rejected --")
+    try:
+        _normalize_ingredients({"Tomato": True, "tomato": False})
+        check("dict collision rejected", False, "should have raised")
+    except ValueError:
+        check("dict collision rejected", True)
+    # A list carries no flag, so repeats collapse without losing anything.
+    check("list repeats still collapse",
+          _normalize_ingredients(["Tomato", "tomato"]) == {"tomato": True})
+
+
+def test_normalize_ingredient_names():
+    print("\n-- normalize_ingredient_names --")
+    names = _handlers_common.normalize_ingredient_names
+    check("list normalized and deduped",
+          names([" Rice ", "rice", "Pasta"]) == ["rice", "pasta"])
+    # A count attached to a name is ignored, not validated: removal deletes the
+    # entry outright, so MAX_PORTION_COUNT does not apply to it.
+    check("dict values ignored", names({"Rice": 500, "pasta": -3}) == ["rice", "pasta"])
+    check("JSON string accepted", names('["Rice"]') == ["rice"])
 
 
 def test_normalize_ingredients_dict():
@@ -669,6 +823,14 @@ def test_tuning_validate_state_corruption_branches():
     check("rejects boolean mass (bool is not a valid float here)",
           tuning.validate_state(boolean_mass)["observations"] == 0)
 
+    # NaN/Infinity pass an isinstance check but freeze the learner silently:
+    # every NaN comparison is False, so the hysteresis test can never fire.
+    for label, bad in (("NaN", float("nan")), ("Infinity", float("inf"))):
+        poisoned = copy.deepcopy(tuning.initialize_state())
+        poisoned["S"][tuning._key(0.60)] = bad
+        check(f"rejects {label} mass",
+              tuning.validate_state(poisoned)["observations"] == 0)
+
 
 def test_tuning_compute_rewards_no_signal():
     print("\n-- tuning.compute_rewards (no-signal cook returns None) --")
@@ -705,6 +867,7 @@ def main():
     test_dish_add_ingredient()
     test_dish_add_ingredient_validation()
     test_dish_ingredient_keys_normalized_on_construction()
+    test_dish_rejects_colliding_ingredient_keys()
 
     test_calculate_score_basic()
     test_calculate_score_cooldown()
@@ -713,6 +876,7 @@ def main():
     test_calculate_score_declaring_optionals_never_penalizes()
     test_calculate_score_match_depends_on_present_count_only()
     test_calculate_score_recency_scaling()
+    test_score_components_agree_with_calculate_score()
 
     test_suggest_dishes_basic()
     test_suggest_dishes_excludes_recent()
@@ -723,8 +887,12 @@ def main():
     test_suggest_quick_shopping_groups_by_ingredient()
     test_suggest_quick_shopping_max_missing()
     test_suggest_quick_shopping_ranks_by_reach()
+    test_suggest_quick_shopping_prefers_cheapest_basket()
+    test_suggest_quick_shopping_score_matches_cheapest_unlock()
 
     test_fridge_repository_counts()
+    test_fridge_repository_non_finite_counts()
+    test_history_set_entry_only_if_newer()
 
     test_normalize_ingredients_dict()
     test_normalize_ingredients_list()
@@ -733,6 +901,8 @@ def main():
     test_normalize_ingredients_invalid()
     test_normalize_ingredients_empty_rejected()
     test_normalize_ingredients_dedup_under_limit()
+    test_normalize_ingredients_rejects_colliding_dict_keys()
+    test_normalize_ingredient_names()
 
     test_tuning_initial_state()
     test_tuning_deployed_weights_fallback()

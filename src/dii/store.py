@@ -10,6 +10,7 @@ import logging
 import re
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -43,6 +44,16 @@ def validate_session_id(session_id: str) -> str:
     return session_id
 
 
+class _SessionLock:
+    """A per-session mutex plus a count of the callers currently using it."""
+
+    __slots__ = ("lock", "users")
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.users = 0
+
+
 class IngredientSessionStore:
     """Thread-safe in-memory store with disk mirror and lazy TTL cleanup."""
 
@@ -57,7 +68,7 @@ class IngredientSessionStore:
         self.cleanup_interval_seconds = cleanup_interval_seconds
         self.session_dir = Path(session_dir)
         self._sessions: dict[str, DIISession] = {}
-        self._locks: dict[str, threading.Lock] = {}
+        self._locks: dict[str, _SessionLock] = {}
         self._global_lock = threading.Lock()
         self._last_cleanup_monotonic: float = 0.0
 
@@ -65,12 +76,31 @@ class IngredientSessionStore:
     # Locking
     # -----------------------------------------------------------------
 
-    def get_lock(self, session_id: str) -> threading.Lock:
-        """Return (or create) the per-session lock."""
+    @contextmanager
+    def session_lock(self, session_id: str):
+        """Hold the per-session mutex for the duration of the block.
+
+        Entries are reference-counted and dropped only when the last holder
+        leaves. Handing out a bare lock and pruning the map elsewhere is unsafe:
+        deleting an entry does not release it, so the next caller mints a fresh
+        mutex and two writers end up inside the same critical section. The
+        refcount also removes the need for a separate orphan sweep — an unused
+        entry deletes itself.
+        """
         with self._global_lock:
-            if session_id not in self._locks:
-                self._locks[session_id] = threading.Lock()
-            return self._locks[session_id]
+            entry = self._locks.get(session_id)
+            if entry is None:
+                entry = self._locks[session_id] = _SessionLock()
+            entry.users += 1
+        entry.lock.acquire()
+        try:
+            yield
+        finally:
+            entry.lock.release()
+            with self._global_lock:
+                entry.users -= 1
+                if entry.users <= 0 and self._locks.get(session_id) is entry:
+                    del self._locks[session_id]
 
     # -----------------------------------------------------------------
     # CRUD
@@ -88,7 +118,6 @@ class IngredientSessionStore:
             # this check get() would serve a session the disk loader rejects.
             if session is not None and parse_iso_to_aware(session.last_activity) < cutoff:
                 self._sessions.pop(session_id, None)
-                self._locks.pop(session_id, None)
                 self._delete_file(session_id)
                 session = None
             if session is None:
@@ -104,14 +133,6 @@ class IngredientSessionStore:
                 raise ValueError(f"Session ID collision: {session.session_id}")
             self._sessions[session.session_id] = session
         self.persist(session)
-
-    def remove(self, session_id: str) -> None:
-        with self._global_lock:
-            self._sessions.pop(session_id, None)
-            self._locks.pop(session_id, None)
-            # Delete the file inside the lock so a concurrent get cannot
-            # resurrect a just-purged session from disk.
-            self._delete_file(session_id)
 
     def _session_path(self, session_id: str) -> Path:
         """Validated ``<session_dir>/<id>.json`` — the only place ids become paths."""
@@ -199,12 +220,9 @@ class IngredientSessionStore:
             ]
             for sid in expired:
                 self._sessions.pop(sid, None)
-                self._locks.pop(sid, None)
                 self._delete_file(sid)
-
-            # Clean orphaned locks (e.g. from lookups on invalid session IDs).
-            for sid in [s for s in self._locks if s not in self._sessions]:
-                del self._locks[sid]
+            # Locks are deliberately not pruned here — ``session_lock`` owns
+            # their lifetime and removes each entry once its last holder leaves.
 
         # Also clean orphaned files on disk (cap iterations to avoid slow scans).
         if self.session_dir.exists():

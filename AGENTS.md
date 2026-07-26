@@ -15,7 +15,7 @@ standard library and persists state in JSON files under `data/`.
 - No build step is configured.
 - No lint step is configured.
 - Tests are plain Python scripts with assertions, not a pytest/unittest harness.
-- CI (`.github/workflows/tests.yml`) runs both test scripts on push to `main`, on pull requests, and on manual dispatch. It is the only automated gate — there is nothing else for it to run.
+- CI (`.github/workflows/tests.yml`) runs both test scripts on push to `main`, on pull requests, and on manual dispatch, across Python 3.12/3.13/3.14. It is the only automated gate — there is nothing else for it to run.
 - Tools are auto-discovered: each module under `src/handlers/` exports `NAME`, `SCHEMA`, `HANDLER` and is picked up by `iter_tools()`. There is no central registry to keep in sync.
 - Relative imports are required inside the package.
 - Preserve the existing JSON data formats and tool names. The one exception on record: `fridge.json` migrated from a flat array of names to a `{name: count}` object (`null` = pantry staple, `0` = out of stock). The loader accepts both shapes and rewrites legacy files on the next save, so no other format may be changed without the same courtesy.
@@ -128,7 +128,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 
 - Each file-backed store singleton owns its own `threading.Lock` instance attribute (`self.lock` on the dish, fridge, and tuning repos; `self._lock` on the history repo).
 - Hold the appropriate lock around load-modify-save sequences.
-- DII sessions also use per-session locks plus a global lock for session maps.
+- DII sessions also use per-session locks plus a global lock for session maps. Always take a session lock through the `IngredientSessionStore.session_lock(session_id)` context manager, which reference-counts holders and prunes the entry itself. Never delete from `_locks` anywhere else: removing a lock does not release it, so a holder mid-critical-section and the next caller end up on different mutexes.
 - Do not bypass the locking helpers when changing persistence behavior.
 - Read-only suggestion queries are intentionally lock-free because they rely on atomic file replacement.
 
@@ -144,7 +144,9 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 - Scoring never rewards essentials — they are a gate enforced by `can_cook_with`. The match term is the count of *optional* ingredients in stock, capped at `OPTIONAL_CAP`.
 - The fridge stores portion counts: `None` = pantry staple (unlimited), `0` = known out of stock, `n > 0` = roughly `n` dishes' worth.
 - `register_cooked_meal` consumes one portion of each essential ingredient after recording the meal; staples are untouched and counts floor at 0 rather than being deleted. It accepts an optional ISO `date` for backdated cooks, which skip the learning update.
-- Quick shopping suggestions surface dishes missing at most `max_missing` essential ingredients (default 1), ranked by how many dishes each ingredient unlocks before score.
+- History keeps one date per dish, so `register_cooked_meal` writes with `only_if_newer=True`: backdating a forgotten meal never erases a more recent cook (which would rewind the cooldown and re-suggest a dish made hours ago). Plain `set_entry` remains last-write-wins for the rollback path.
+- Colliding normalized names in a dict argument are rejected, not silently merged — the values can disagree. List arguments still collapse repeats. `Dish.from_dict` stays permissive so existing catalog rows keep loading.
+- Quick shopping suggestions surface dishes missing at most `max_missing` essential ingredients (default 1), ranked by smallest basket (`still_missing`) first, then reach, then score. Reach-first alone promoted ingredients that unlock nothing on their own once `max_missing > 1`.
 - DII sessions reveal suggestions one at a time through the probability funnel.
 - Removing an essential ingredient in a DII session should signal that recalculation is needed.
 
@@ -167,7 +169,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 - It intentionally exercises error cases and may print stack traces for expected failures.
 - For a single integration scenario, call `_setup_tmp_data` / `_teardown_tmp_data` around one `test_*` function.
 - Prefer the narrowest test that covers the changed code path.
-- `.github/workflows/tests.yml` runs `test_unit.py` then `test_integration.py` on Python 3.12 / `ubuntu-latest`. Both must exit zero, so a script that only *prints* a failure without asserting will pass CI — assert, don't print.
+- `.github/workflows/tests.yml` runs `test_unit.py` then `test_integration.py` on Python 3.12, 3.13, and 3.14 / `ubuntu-latest`. Both must exit zero, so a script that only *prints* a failure without asserting will pass CI — assert, don't print.
 
 ## Tool And Schema Notes
 

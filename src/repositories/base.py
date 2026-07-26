@@ -49,7 +49,13 @@ class HistoryRepository(Protocol):
     """
 
     def load(self) -> dict[str, str]: ...
-    def set_entry(self, dish_name: str, date_str: str) -> str | None: ...
+    def set_entry(
+        self,
+        dish_name: str,
+        date_str: str,
+        *,
+        only_if_newer: bool = False,
+    ) -> str | None: ...
     def remove_entry(self, dish_name: str) -> bool: ...
     def revert_entry(
         self,

@@ -1,4 +1,4 @@
-"""Integration smoke test for all 20 meal_manager tools.
+"""Integration smoke test for all 21 meal_manager tools.
 
 The test creates a throw-away data directory under ``tempfile.gettempdir()``
 and points the repositories + DII session store at it via the package-level
@@ -281,6 +281,59 @@ def test_register_cooked_meal_backdated():
     check("future date rejected", "error" in bad, f"got {bad}")
     bad2 = parse(register_cooked_meal({"dish_name": "Backdate Dish", "date": "not-a-date"}))
     check("malformed date rejected", "error" in bad2, f"got {bad2}")
+
+
+def test_register_cooked_meal_backdate_preserves_newer():
+    print("\n-- register_cooked_meal (backdating keeps the newer entry) --")
+    from datetime import date as _date, timedelta as _timedelta
+    add_dish({"name": "Paella Reciente", "ingredients": {"pr_a": True}})
+    update_fridge_inventory({"action": "set", "ingredients": {"pr_a": 10}})
+
+    register_cooked_meal({"dish_name": "Paella Reciente"})
+    today = _date.today().isoformat()
+    check("today's cook recorded",
+          _repos_mod.history_repo.load().get("paella reciente") == today)
+
+    # Recording a forgotten meal from a month ago must not erase this morning's
+    # cook and hand the dish back to the engine inside its cooldown window.
+    old = (_date.today() - _timedelta(days=30)).isoformat()
+    result = parse(register_cooked_meal({"dish_name": "Paella Reciente", "date": old}))
+    check("backdated cook still succeeds", "error" not in str(result), f"got {result}")
+    check("newer history entry preserved",
+          _repos_mod.history_repo.load().get("paella reciente") == today,
+          f"got {_repos_mod.history_repo.load()}")
+    check("response explains the entry was kept",
+          "more recent" in result, f"got {result}")
+    check("fridge still consumed for the backdated meal",
+          _repos_mod.fridge_repo.load().get("pr_a") == 8,
+          f"got {_repos_mod.fridge_repo.load()}")
+    check("dish stays gated by the cooldown",
+          not any(s["dish"] == "paella reciente" for s in parse(get_meal_suggestions({}))),
+          f"got {parse(get_meal_suggestions({}))}")
+
+    # A genuinely older-then-newer sequence still advances normally.
+    register_cooked_meal({"dish_name": "Paella Reciente"})
+    check("same-day re-register is fine",
+          _repos_mod.history_repo.load().get("paella reciente") == today)
+
+
+def test_update_fridge_remove_ignores_counts():
+    print("\n-- update_fridge_inventory (remove ignores portion counts) --")
+    update_fridge_inventory({"action": "set", "ingredients": {"rm_a": 3, "rm_b": 1}})
+    # Echoing back a count seen in list_fridge used to fail removal on a limit
+    # that does not apply to it.
+    result = parse(update_fridge_inventory({
+        "action": "remove", "ingredients": {"rm_a": 500}}))
+    check("removal with an out-of-range count succeeds",
+          isinstance(result, str) and "removed" in result.lower(), f"got {result}")
+    check("entry actually gone", "rm_a" not in _repos_mod.fridge_repo.load())
+    result2 = parse(update_fridge_inventory({
+        "action": "remove", "ingredients": {"rm_b": None}}))
+    check("removal with a null count succeeds",
+          isinstance(result2, str) and "removed" in result2.lower(), f"got {result2}")
+    # 'add' and 'set' still police counts, where they do mean something.
+    bad = parse(update_fridge_inventory({"action": "add", "ingredients": {"rm_c": 500}}))
+    check("add still rejects out-of-range counts", "error" in bad, f"got {bad}")
 
 
 def test_update_fridge_remove():
@@ -872,6 +925,84 @@ def test_dii_store_ttl_and_recovery():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_dii_session_lock_is_exclusive():
+    print("\n-- DII store: per-session lock survives a concurrent cleanup --")
+    import threading
+    store_mod = importlib.import_module(".src.dii.store", _PLUGIN_DIR.name)
+    session_mod = importlib.import_module(".src.dii.session", _PLUGIN_DIR.name)
+    tmp = Path(tempfile.mkdtemp(prefix="store_lock_"))
+    try:
+        # cleanup_interval_seconds=0 makes every call sweep, which is what used
+        # to evict a lock out from under the thread holding it — after which the
+        # next caller got a fresh mutex and both ran the critical section.
+        store = store_mod.IngredientSessionStore(session_dir=tmp,
+                                                 cleanup_interval_seconds=0)
+        session = session_mod.DIISession(
+            session_id="locked", dish_name="d",
+            created_at=session_mod.now_iso(), last_activity=session_mod.now_iso())
+        store.put(session)
+
+        inside, overlaps = [], []
+        done = threading.Event()
+
+        def worker(tag):
+            for _ in range(100):
+                with store.session_lock("locked"):
+                    inside.append(tag)
+                    if len(inside) > 1:
+                        overlaps.append(tuple(inside))
+                    inside.remove(tag)
+
+        def sweeper():
+            while not done.is_set():
+                store.cleanup_expired()
+                store.get("locked")
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+        sweep = threading.Thread(target=sweeper, daemon=True)
+        sweep.start()
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        done.set()
+
+        check("no two threads inside the critical section",
+              overlaps == [], f"got {overlaps[:3]}")
+        check("lock map self-prunes when idle", store._locks == {}, f"got {store._locks}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_dii_finalize_reports_fridge_additions():
+    print("\n-- DII: finalize reports commit vs. how much changed --")
+    update_fridge_inventory({"action": "set", "ingredients": {"already_here": 2}})
+    state = parse(init_ingredient_session({
+        "dish_name": "Ya En Nevera",
+        "ingredients": ["already_here"],
+        "is_essential": [True],
+        "pre_select_top_n": 1,
+    }))
+    res = parse(finalize_ingredient_session({"session_id": state["session_id"]}))
+    # The commit happened in full; nothing needed adding. Reporting False here
+    # used to read as a failure to the caller.
+    check("commit reported as done even with nothing to add",
+          res["committed_to_fridge"] is True, f"got {res}")
+    check("items-added count carries the 'what changed' signal",
+          res["fridge_items_added"] == 0, f"got {res}")
+    check("existing count untouched",
+          _repos_mod.fridge_repo.load().get("already_here") == 2)
+
+    state2 = parse(init_ingredient_session({
+        "dish_name": "Nueva Nevera",
+        "ingredients": ["brand_new"],
+        "is_essential": [True],
+        "pre_select_top_n": 1,
+    }))
+    res2 = parse(finalize_ingredient_session({"session_id": state2["session_id"]}))
+    check("fresh ingredient counted", res2["fridge_items_added"] == 1, f"got {res2}")
+
+
 def test_dii_session_id_traversal_rejected():
     print("\n-- security: session_id path traversal cannot touch other files --")
     (_TMP_DATA_DIR / "dishes.json").write_text(
@@ -932,6 +1063,7 @@ def main():
         test_get_missing_for_dish()
         test_update_fridge_add()
         test_update_fridge_add_duplicate()
+        test_update_fridge_remove_ignores_counts()
         test_update_fridge_remove()
         test_get_meal_suggestions()
         test_get_quick_shopping_list()
@@ -958,6 +1090,7 @@ def main():
         test_fridge_counts_and_staples()
         test_cook_decrements_instead_of_deleting()
         test_register_cooked_meal_backdated()
+        test_register_cooked_meal_backdate_preserves_newer()
 
         # DII
         test_dii_full_lifecycle()
@@ -978,6 +1111,8 @@ def main():
         test_edit_dish_empty_rejected()
         test_dii_finalize_empty_selection_no_wipe()
         test_dii_store_ttl_and_recovery()
+        test_dii_session_lock_is_exclusive()
+        test_dii_finalize_reports_fridge_additions()
 
         # Online weight tuning (self-contained; runs late so it cannot perturb
         # the fridge/catalog state the earlier assertions depend on).

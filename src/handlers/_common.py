@@ -27,6 +27,7 @@ MAX_NAME_LEN = 200
 MAX_INGREDIENTS = 100
 MAX_BATCH_SIZE = 50
 MAX_FRIDGE_UPDATE = 200
+MAX_PORTION_COUNT = 99
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +114,8 @@ def normalize_ingredients(ingredients) -> dict:
     if isinstance(ingredients, str):
         raise ValueError(f"Cannot parse ingredients string: {ingredients!r}")
     if isinstance(ingredients, list):
+        # Every list entry means the same thing (essential), so repeats collapse
+        # without losing information.
         result = {}
         for ing in ingredients:
             result[normalize_ingredient_name(ing)] = True
@@ -121,7 +124,13 @@ def normalize_ingredients(ingredients) -> dict:
         for key, value in ingredients.items():
             if not isinstance(value, bool):
                 raise ValueError(f"ingredient '{key}' must be true or false")
-            result[normalize_ingredient_name(key)] = value
+            name = normalize_ingredient_name(key)
+            # Unlike a list, two dict keys that collide after normalization can
+            # disagree ({"Rice": true, "rice": false}). Reject rather than let
+            # one flag silently win.
+            if name in result:
+                raise ValueError(f"duplicate ingredient '{name}' after normalization")
+            result[name] = value
     else:
         raise ValueError(f"ingredients must be a dict or list, got {type(ingredients).__name__}")
     if not result:
@@ -133,7 +142,26 @@ def normalize_ingredients(ingredients) -> dict:
     return result
 
 
-MAX_PORTION_COUNT = 99
+def normalize_ingredient_names(ingredients) -> list[str]:
+    """Accept ``["a", "b"]`` or ``{"a": 3}`` -> ``["a", "b"]`` (order preserved).
+
+    For paths where a portion count is meaningless — fridge removal deletes the
+    entry outright — so a count that happens to be present is ignored rather
+    than validated. Without this, echoing back a count seen in ``list_fridge``
+    would fail a removal on a limit that does not apply to it.
+    """
+    ingredients = maybe_parse_json_arg(ingredients)
+    if isinstance(ingredients, str):
+        raise ValueError(f"Cannot parse ingredients string: {ingredients!r}")
+    if isinstance(ingredients, dict):
+        raw_names = list(ingredients.keys())
+    elif isinstance(ingredients, list):
+        raw_names = ingredients
+    else:
+        raise ValueError(
+            f"ingredients must be a dict or list, got {type(ingredients).__name__}"
+        )
+    return list(dict.fromkeys(normalize_ingredient_name(name) for name in raw_names))
 
 
 def normalize_ingredient_counts(ingredients) -> dict:
@@ -155,6 +183,10 @@ def normalize_ingredient_counts(ingredients) -> dict:
     result: dict = {}
     for raw_name, raw_count in ingredients.items():
         name = normalize_ingredient_name(raw_name)
+        # Colliding keys can carry different counts, so one silently winning
+        # would discard a number the caller supplied deliberately.
+        if name in result:
+            raise ValueError(f"duplicate ingredient '{name}' after normalization")
         if raw_count is None:
             result[name] = None
             continue
@@ -179,6 +211,16 @@ def days_since_last_cook() -> dict[str, int]:
         except ValueError as exc:
             logger.warning("Skipping malformed history entry %r: %s", name, exc)
             continue
+        if days < 0:
+            # Only reachable from a hand-edited file or a clock jump — the tool
+            # boundary rejects future dates. Clamping keeps the dish gated by
+            # the cooldown instead of scoring it, but say so: otherwise the dish
+            # silently disappears from suggestions with nothing to point at.
+            logger.warning(
+                "History entry %r is dated in the future (%s); treating it as cooked today",
+                name,
+                date_str,
+            )
         # history_repo.load() already returns normalized (stripped/lowercased)
         # keys, so no re-normalization is needed here.
         result[name] = max(days, 0)

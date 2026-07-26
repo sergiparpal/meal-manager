@@ -16,6 +16,16 @@ logger = logging.getLogger(__name__)
 
 NAME = "register_cooked_meal"
 
+
+def _kept_newer_entry(previous: str | None, cooked_iso: str) -> bool:
+    """True when a more recent history entry was preserved instead of overwritten."""
+    if previous is None:
+        return False
+    try:
+        return date.fromisoformat(previous) > date.fromisoformat(cooked_iso)
+    except (TypeError, ValueError):
+        return False
+
 SCHEMA = {
     "description": (
         "Register that a specific dish was cooked. Records it in the cooking "
@@ -76,7 +86,11 @@ def HANDLER(args: dict, **kwargs):
         backdated = cooked_on != date.today()
     cooked_iso = cooked_on.isoformat()
 
-    previous_history = history_repo.set_entry(name, cooked_iso)
+    # History holds one date per dish. Recording a forgotten meal from last month
+    # must not overwrite a cook from this morning — that would hand the dish back
+    # to the suggestion engine while it is still inside its cooldown window.
+    previous_history = history_repo.set_entry(name, cooked_iso, only_if_newer=True)
+    superseded = _kept_newer_entry(previous_history, cooked_iso)
 
     essentials = [ing for ing, is_essential in dish.ingredients.items() if is_essential]
 
@@ -117,4 +131,14 @@ def HANDLER(args: dict, **kwargs):
         removed_msg = f" Consumed from fridge: {', '.join(parts)}."
     else:
         removed_msg = ""
-    return f"Registered '{dish.name}' as cooked on {cooked_iso}.{removed_msg}"
+
+    if superseded:
+        history_msg = (
+            f" Cooking history still shows {previous_history}, which is more recent,"
+            " so the recency cooldown is unchanged."
+        )
+    else:
+        history_msg = ""
+    return (
+        f"Registered '{dish.name}' as cooked on {cooked_iso}.{removed_msg}{history_msg}"
+    )

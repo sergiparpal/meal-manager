@@ -20,10 +20,18 @@ class Dish:
         # construction path (direct, dataclasses.replace, …), so consumers can
         # compare against the always-lowercased fridge without re-normalizing.
         if self.ingredients:
-            self.ingredients = {
-                self.normalize_ingredient(key): value
-                for key, value in self.ingredients.items()
-            }
+            normalized = {}
+            for key, value in self.ingredients.items():
+                ingredient = self.normalize_ingredient(key)
+                # Two keys that collide after normalization carry contradictory
+                # flags ({"Rice": True, "rice": False}); silently keeping one
+                # would drop a declaration the caller made on purpose.
+                if ingredient in normalized:
+                    raise ValueError(
+                        f"duplicate ingredient '{ingredient}' after normalization"
+                    )
+                normalized[ingredient] = value
+            self.ingredients = normalized
 
     @staticmethod
     def _clean(value, *, label):

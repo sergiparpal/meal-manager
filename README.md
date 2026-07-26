@@ -28,10 +28,10 @@ The result is a system that offers the user the freedom of conversation while gu
 
 - **Smart Meal Suggestions** — Ranks every dish in the catalog using a weighted scoring algorithm that combines ingredient availability with cooking recency (starting at a 60/40 blend). Availability is measured over *optional* ingredients only: essentials are a gate, since a dish missing one is not offered at all. Dishes cooked fewer than 2 days ago are automatically excluded.
 - **Adaptive Suggestion Weights** — The availability/recency blend self-adjusts with use. Each cooked meal feeds a bounded, deterministic online learner (no background job, no randomness) that nudges the weighting toward whatever has been ranking your actual choices best. The current blend and learning status are inspectable at any time via `get_tuning_state`, and a fresh install behaves exactly like the classic 60/40 blend until enough meals accumulate.
-- **Reach-Ranked Shopping List** — Identifies ingredients that, once purchased, unlock entirely new dishes, ranked by how many dishes each one unlocks before falling back to projected score. Defaults to single-ingredient unlocks; raise `max_missing` to 2-3 when the fridge is nearly empty and no one-item unlock exists.
+- **Unlock-Ranked Shopping List** — Identifies ingredients that, once purchased, unlock entirely new dishes, ranked by the size of the smallest basket that actually gets you to a meal, then by how many dishes each ingredient reaches, then by projected score. Defaults to single-ingredient unlocks; raise `max_missing` to 2-3 when the fridge is nearly empty and no one-item unlock exists.
 - **What a Dish Still Needs** — `get_missing_for_dish` answers "can I make this tonight?" for a named dish, splitting what is missing into blocking essentials and score-only optionals.
 - **Fridge Inventory Management** — Add, remove, or set ingredients as you shop or cook, tracked as approximate portion counts rather than an all-or-nothing list. Pantry staples (salt, oil, spices) are marked unlimited and never run out. Ingredient and dish names are normalized to lowercase for consistent matching.
-- **Cooking History Tracking** — Logs cooked meals with ISO dates, including backdated ones. History keys are normalized to lowercase on load, so comparisons are case-insensitive.
+- **Cooking History Tracking** — Logs cooked meals with ISO dates, including backdated ones. Because history keeps a single date per dish, backdating never overwrites a more recent cook — recording a forgotten meal from last month cannot rewind the cooldown on something you made this morning. History keys are normalized to lowercase on load, so comparisons are case-insensitive.
 - **Portion Accounting on Cook** — When a meal is registered as cooked, one portion of each essential ingredient is consumed from the fridge. An ingredient you had plenty of stays available; one that runs out is remembered as out of stock rather than silently deleted.
 - **Essential vs. Optional Ingredients** — Recipes distinguish between must-have ingredients (required to cook) and nice-to-have ingredients (boost the suggestion score but are not blocking).
 - **Dynamic Ingredient Interface (DII)** — Interactive, stateful ingredient selection via plain text conversation. A "probability funnel" reveals ranked ingredient suggestions one at a time. The agent interprets free-text user responses (e.g. "yes", "skip", "add X") to drive add/skip/remove/manual-add controls. Removing an essential ingredient triggers a recalculation signal so the agent can re-evaluate suggestions.
@@ -140,7 +140,7 @@ The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `_
 | Tool | Purpose |
 |---|---|
 | `get_meal_suggestions` | Returns a ranked list of dishes you can cook right now |
-| `get_quick_shopping_list` | Returns purchases that unlock new dishes, ranked by how many each unlocks |
+| `get_quick_shopping_list` | Returns purchases that unlock new dishes, cheapest real unlock first |
 | `get_missing_for_dish` | Reports what one named dish is still missing, split into essentials and optionals |
 | `get_tuning_state` | Reports the current self-adjusted availability/recency blend and learning status |
 | `update_fridge_inventory` | Adds, removes, or sets fridge ingredients and their portion counts |
@@ -209,13 +209,13 @@ meal-manager/
 │   ├── __init__.py            # Package marker + atomic_write_json helper
 │   ├── dish.py                # Dish dataclass — recipe model (essential/optional ingredients)
 │   ├── suggestion.py          # Scoring engine — ranks dishes by availability + recency
-│   ├── shopping.py            # Shopping suggestions — near-miss unlock logic, ranked by reach
+│   ├── shopping.py            # Shopping suggestions — near-miss unlock logic, cheapest basket first
 │   ├── tuning.py              # Online learner — self-adjusts the availability/recency blend
 │   ├── handlers/              # One module per registered tool (NAME, SCHEMA, HANDLER)
 │   │   ├── __init__.py                     # iter_tools() walks the package and yields each triple
 │   │   ├── _common.py                      # Shared helpers (tool_handler decorator, normalization, input limits)
 │   │   ├── get_meal_suggestions.py         # Rank cookable dishes by availability and recency
-│   │   ├── get_quick_shopping_list.py      # Purchases that unlock new dishes, ranked by reach
+│   │   ├── get_quick_shopping_list.py      # Purchases that unlock new dishes, cheapest basket first
 │   │   ├── get_missing_for_dish.py         # What one named dish is still missing
 │   │   ├── get_tuning_state.py             # Read-only report of the self-adjusted suggestion weights
 │   │   ├── update_fridge_inventory.py      # Add, remove, or set fridge ingredients and portion counts

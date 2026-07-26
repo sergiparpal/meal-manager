@@ -30,9 +30,11 @@ Identifies ingredients that, when purchased, unlock new dishes. Each row returns
 
 - `missing_ingredient` — the item to buy.
 - `unlocks_dishes` — comma-separated list of every dish it unlocks.
-- `unlocks_count` — how many dishes that is. Results are ranked by this first, so the top row is the highest-leverage purchase.
+- `unlocks_count` — how many dishes name this ingredient. Note this is reach, not unlocks-on-its-own: a high count with `still_missing: 3` means three dishes want it and none of them is close.
 - `still_missing` — the size of the smallest basket that unlocks a dish through this ingredient. `1` means buying this item alone is enough; `2` or more means it is part of a multi-item basket and buying it by itself unlocks nothing yet. **Always tell the user which case they are in** — never present a multi-item unlock as a one-item unlock.
-- `score` — the projected suggestion score of the best dish it unlocks.
+- `score` — the projected suggestion score of the dish behind `still_missing`, i.e. the meal that basket actually buys.
+
+Rows are ranked by `still_missing` first, so genuine one-item unlocks lead, then by `unlocks_count`, then by `score`. The top row is the cheapest real path to a meal.
 
 Optional argument `max_missing` (1-5, default 1) sets how many essential ingredients a dish may be short of and still appear.
 
@@ -67,7 +69,7 @@ A count of `null` marks a **pantry staple** — something that never runs out (s
 
 Registers that a dish was cooked so the suggestion engine doesn't recommend it again too soon. Consumes **one portion** of each essential ingredient from the fridge rather than deleting it, so an ingredient the user had plenty of stays available. Pantry staples are left untouched.
 
-Optional argument `date` (ISO `YYYY-MM-DD`) records a meal cooked in the past; it defaults to today and cannot be in the future.
+Optional argument `date` (ISO `YYYY-MM-DD`) records a meal cooked in the past; it defaults to today and cannot be in the future. History keeps one date per dish — the last time it was cooked — so a backdated entry never replaces a more recent one. If the dish already has a newer date, the meal is still recorded and the fridge is still consumed, but the cooldown stays where it was and the response says so; relay that to the user rather than claiming the history changed.
 
 - **When to use:**
   - The user says they cooked or are cooking a specific dish.

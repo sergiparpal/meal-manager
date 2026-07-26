@@ -4,6 +4,7 @@ from ..repositories import fridge_repo
 from ._common import (
     MAX_FRIDGE_UPDATE,
     normalize_ingredient_counts,
+    normalize_ingredient_names,
     require_arg,
     tool_handler,
 )
@@ -48,6 +49,28 @@ def _fmt(value):
     return "staple" if value is None else str(value)
 
 
+def _remove(names: list[str]) -> str:
+    if len(names) > MAX_FRIDGE_UPDATE:
+        raise ValueError(f"Too many ingredients (max {MAX_FRIDGE_UPDATE})")
+    if not names:
+        return "No changes — no valid ingredients provided."
+
+    with fridge_repo.lock:
+        fridge = fridge_repo.load()
+        removed = [ing for ing in names if ing in fridge]
+        not_found = [ing for ing in names if ing not in fridge]
+        if not removed:
+            return f"No changes — {', '.join(names)} not found in the fridge."
+        for ing in removed:
+            del fridge[ing]
+        fridge_repo.save(fridge)
+
+    msg = f"Removed {', '.join(sorted(removed))} from the fridge."
+    if not_found:
+        msg += f" Not found: {', '.join(sorted(not_found))}."
+    return msg
+
+
 @tool_handler(NAME)
 def HANDLER(args: dict, **kwargs):
     action = require_arg(args, "action")
@@ -55,6 +78,11 @@ def HANDLER(args: dict, **kwargs):
 
     if action not in ("add", "remove", "set"):
         raise ValueError(f"action must be 'add', 'remove' or 'set', got '{action}'")
+
+    if action == "remove":
+        # Removal deletes the entry outright, so a count attached to the name is
+        # meaningless here and must not be validated against MAX_PORTION_COUNT.
+        return _remove(normalize_ingredient_names(raw_items))
 
     counts = normalize_ingredient_counts(raw_items)
     if len(counts) > MAX_FRIDGE_UPDATE:
@@ -64,19 +92,6 @@ def HANDLER(args: dict, **kwargs):
 
     with fridge_repo.lock:
         fridge = fridge_repo.load()
-
-        if action == "remove":
-            removed = [ing for ing in counts if ing in fridge]
-            not_found = [ing for ing in counts if ing not in fridge]
-            if not removed:
-                return f"No changes — {', '.join(counts)} not found in the fridge."
-            for ing in removed:
-                del fridge[ing]
-            fridge_repo.save(fridge)
-            msg = f"Removed {', '.join(sorted(removed))} from the fridge."
-            if not_found:
-                msg += f" Not found: {', '.join(sorted(not_found))}."
-            return msg
 
         changes = []
         unchanged = []

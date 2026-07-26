@@ -22,21 +22,36 @@ COOLDOWN_DAYS = 2
 RECENCY_CAP_DAYS = 14
 
 
-def calculate_score(dish, available_ingredients, days_since_last,
-                    match_weight=DEFAULT_MATCH_WEIGHT, time_weight=DEFAULT_TIME_WEIGHT):
+def score_components(dish, available_ingredients, days_since_last):
+    """Return the ``(match, recency)`` pair behind a dish's score, or None.
+
+    Both terms are in [0, 1] and neither depends on the blend weights, so a
+    caller that ranks the same catalog under several candidate weights (the
+    tuning learner) computes them once instead of per candidate. ``None``
+    means the dish is gated out entirely — cooked inside the cooldown window,
+    or carrying no ingredients at all — which is what ``calculate_score``
+    reports as a flat 0.
+    """
     if days_since_last < COOLDOWN_DAYS:
-        return 0
+        return None
 
     if not dish.ingredients:
-        return 0
+        return None
 
     optionals = [ing for ing, is_essential in dish.ingredients.items() if not is_essential]
     available_optionals = sum(1 for ing in optionals if ing in available_ingredients)
 
     match_percentage = min(available_optionals, OPTIONAL_CAP) / OPTIONAL_CAP
-
     normalized_time = min(days_since_last, RECENCY_CAP_DAYS) / float(RECENCY_CAP_DAYS)
+    return match_percentage, normalized_time
 
+
+def calculate_score(dish, available_ingredients, days_since_last,
+                    match_weight=DEFAULT_MATCH_WEIGHT, time_weight=DEFAULT_TIME_WEIGHT):
+    components = score_components(dish, available_ingredients, days_since_last)
+    if components is None:
+        return 0
+    match_percentage, normalized_time = components
     return match_weight * match_percentage + time_weight * normalized_time
 
 

@@ -16,7 +16,9 @@ Determinism: given a state file, the output is fully reproducible. There is no
 randomness anywhere in this module.
 """
 
-from .suggestion import suggest_dishes
+import math
+
+from .suggestion import RECENCY_CAP_DAYS, score_components
 
 # ---------------------------------------------------------------------------
 # Hyperparameters (module constants — there is no external config surface)
@@ -121,10 +123,15 @@ def validate_state(raw) -> dict:
     if set(S.keys()) != expected_keys or set(C.keys()) != expected_keys:
         return initialize_state()
     for key in expected_keys:
-        if not isinstance(S[key], (int, float)) or isinstance(S[key], bool):
-            return initialize_state()
-        if not isinstance(C[key], (int, float)) or isinstance(C[key], bool):
-            return initialize_state()
+        for mass in (S[key], C[key]):
+            if not isinstance(mass, (int, float)) or isinstance(mass, bool):
+                return initialize_state()
+            # NaN/Infinity survive an isinstance check but poison the learner
+            # silently: every NaN comparison is False, so the hysteresis test in
+            # select_deployed can never fire again and the weight freezes with
+            # no error anywhere. Treat non-finite mass as corruption.
+            if not math.isfinite(mass):
+                return initialize_state()
 
     return raw
 
@@ -149,14 +156,31 @@ def compute_rewards(cooked_name, dishes, fridge_set, days_map, candidates):
     if N < 2:
         return None
 
+    # Both score terms depend only on the fridge/history snapshot, never on w,
+    # so compute them once and blend per candidate. Re-running the full ranking
+    # once per candidate would walk every dish's ingredients nine times over.
+    # Dishes gated out entirely (cooldown, no ingredients) drop here, which is
+    # exactly what suggest_dishes does with their zero score.
+    scored: list[tuple[str, tuple[float, float]]] = []
+    for dish in cookable:
+        days = days_map.get(dish.name, RECENCY_CAP_DAYS)
+        components = score_components(dish, fridge_set, days)
+        if components is not None:
+            scored.append((dish.name, components))
+
     rewards: dict[str, float] = {}
     found_any = False
     for w in candidates:
-        ranking = suggest_dishes(cookable, fridge_set, days_map,
-                                 match_weight=w, time_weight=1 - w)
+        time_weight = 1 - w
+        ranking = []
+        for name, (match, recency) in scored:
+            score = w * match + time_weight * recency
+            if score > 0:
+                ranking.append((name, score))
+        ranking.sort(key=lambda item: item[1], reverse=True)
         pos = N  # dishes scoring 0 are dropped from the ranking -> bottom
-        for index, (dish, _score) in enumerate(ranking):
-            if dish.name == cooked_name:
+        for index, (name, _score) in enumerate(ranking):
+            if name == cooked_name:
                 pos = index + 1
                 found_any = True
                 break

@@ -183,17 +183,13 @@ def add_manual(
     session: DIISession,
     ingredient: str,
     is_essential: bool = True,
-) -> tuple[bool, str | None]:
-    """Add a user-typed ingredient. Returns ``(changed, error_message)``.
-
-    Empty input returns ``(False, "...")`` rather than raising so the public
-    API can attach the message to a no-change response.
-    """
+) -> None:
+    """Add a user-typed ingredient, raising on invalid input like :func:`remove`."""
     if not isinstance(is_essential, bool):
         raise ValueError("is_essential must be a boolean")
     name = Dish.normalize_ingredient(ingredient)
     if not name:
-        return False, "Ingredient name cannot be empty"
+        raise ValueError("Ingredient name cannot be empty")
 
     _select(session, name, essential=is_essential)
 
@@ -209,7 +205,6 @@ def add_manual(
         _advance_queue(session)
 
     _touch(session)
-    return True, None
 
 
 def clear_all(session: DIISession) -> bool:
