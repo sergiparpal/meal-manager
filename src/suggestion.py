@@ -3,9 +3,18 @@
 DEFAULT_MATCH_WEIGHT = 0.6
 DEFAULT_TIME_WEIGHT = 0.4
 
-# Within the ingredient match, essentials dominate; optionals only nudge.
-ESSENTIAL_WEIGHT = 0.8
-OPTIONAL_WEIGHT = 0.2
+# Essentials are a gate, not a score. Every dish that reaches calculate_score has
+# already been proven to have all of them (suggest_dishes filters with
+# can_cook_with; suggest_quick_shopping simulates the one missing essential), so
+# scoring them again only adds a constant with no discriminating power.
+#
+# The ingredient signal is therefore the number of OPTIONAL ingredients actually
+# in stock, capped so a long optional list cannot dominate. This is an absolute
+# count rather than an intra-dish ratio on purpose: a ratio makes declaring no
+# optionals score identically to having them all, which penalizes well-described
+# recipes. With a count, declaring an optional you have raises the score and
+# declaring one you lack is free.
+OPTIONAL_CAP = 3
 
 # Recency normalization: dishes cooked within COOLDOWN_DAYS are excluded;
 # dishes cooked >= RECENCY_CAP_DAYS receive the maximum recency score.
@@ -21,16 +30,10 @@ def calculate_score(dish, available_ingredients, days_since_last,
     if not dish.ingredients:
         return 0
 
-    essentials = [ing for ing, is_essential in dish.ingredients.items() if is_essential]
     optionals = [ing for ing, is_essential in dish.ingredients.items() if not is_essential]
-
-    available_essentials = sum(1 for ing in essentials if ing in available_ingredients)
     available_optionals = sum(1 for ing in optionals if ing in available_ingredients)
 
-    essential_percentage = available_essentials / len(essentials) if essentials else 1.0
-    optional_percentage = available_optionals / len(optionals) if optionals else 1.0
-
-    match_percentage = essential_percentage * ESSENTIAL_WEIGHT + optional_percentage * OPTIONAL_WEIGHT
+    match_percentage = min(available_optionals, OPTIONAL_CAP) / OPTIONAL_CAP
 
     normalized_time = min(days_since_last, RECENCY_CAP_DAYS) / float(RECENCY_CAP_DAYS)
 

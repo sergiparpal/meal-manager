@@ -28,6 +28,8 @@ _handlers_common = importlib.import_module(".src.handlers._common", _PLUGIN_DIR.
 
 Dish = _dish_mod.Dish
 calculate_score = _suggestion_mod.calculate_score
+DEFAULT_TIME_WEIGHT = _suggestion_mod.DEFAULT_TIME_WEIGHT
+OPTIONAL_CAP = _suggestion_mod.OPTIONAL_CAP
 suggest_dishes = _suggestion_mod.suggest_dishes
 suggest_quick_shopping = _shopping_mod.suggest_quick_shopping
 tuning = _tuning_mod
@@ -178,9 +180,19 @@ def test_calculate_score_basic():
     dish = Dish(name="test")
     dish.ingredients = {"rice": True, "chicken": True}
 
+    # Essentials are a gate, not a score: a dish with no optionals contributes
+    # nothing from the match term, so a fully-rested dish scores exactly the
+    # recency weight.
     score = calculate_score(dish, {"rice", "chicken"}, 14)
     check("positive score", score > 0, f"got {score}")
-    check("max score = 1.0", abs(score - 1.0) < 0.001, f"got {score}")
+    check("essentials-only dish scores the recency term",
+          abs(score - DEFAULT_TIME_WEIGHT) < 0.001, f"got {score}")
+
+    # The ceiling needs OPTIONAL_CAP optionals in stock.
+    rich = Dish(name="rich")
+    rich.ingredients = {"rice": True, "a": False, "b": False, "c": False}
+    top = calculate_score(rich, {"rice", "a", "b", "c"}, 14)
+    check("max score = 1.0", abs(top - 1.0) < 0.001, f"got {top}")
 
 
 def test_calculate_score_cooldown():
@@ -207,6 +219,46 @@ def test_calculate_score_partial_ingredients():
     full = calculate_score(dish, {"rice", "chicken", "pepper"}, 14)
     without_optional = calculate_score(dish, {"rice", "chicken"}, 14)
     check("optional increases score", full > without_optional, f"{full} > {without_optional}")
+
+
+def test_calculate_score_declaring_optionals_never_penalizes():
+    print("\n-- calculate_score (declaring optionals never penalizes) --")
+    # Same real dish, described at two levels of detail. The fridge holds
+    # everything the detailed version declares except one optional.
+    terse = Dish(name="terse", ingredients={"chicken": True, "rice": True})
+    detailed = Dish(name="detailed", ingredients={
+        "chicken": True, "rice": True,
+        "onion": False, "garlic": False, "parsley": False,
+    })
+    fridge = {"chicken", "rice", "onion", "garlic"}
+
+    terse_score = calculate_score(terse, fridge, 14)
+    detailed_score = calculate_score(detailed, fridge, 14)
+    check("describing the recipe better never lowers its score",
+          detailed_score >= terse_score,
+          f"terse={terse_score} detailed={detailed_score}")
+    check("present optionals raise the score",
+          detailed_score > terse_score,
+          f"terse={terse_score} detailed={detailed_score}")
+
+
+def test_calculate_score_match_depends_on_present_count_only():
+    print("\n-- calculate_score (match depends on present count only) --")
+    # Two dishes, same number of optionals IN STOCK (one), different numbers
+    # declared. Under the old intra-dish ratio these diverged; they must not now.
+    few = Dish(name="few", ingredients={"base": True, "a": False})
+    many = Dish(name="many", ingredients={
+        "base": True, "a": False, "x": False, "y": False, "z": False,
+    })
+    fridge = {"base", "a"}
+    check("equal present-optional counts score equally",
+          abs(calculate_score(few, fridge, 14) - calculate_score(many, fridge, 14)) < 1e-9,
+          f"{calculate_score(few, fridge, 14)} vs {calculate_score(many, fridge, 14)}")
+
+    # And a dish declaring nothing is not treated as fully stocked.
+    bare = Dish(name="bare", ingredients={"base": True})
+    check("declaring no optionals is not a free full match",
+          calculate_score(bare, fridge, 14) < calculate_score(few, fridge, 14))
 
 
 def test_calculate_score_recency_scaling():
@@ -574,6 +626,8 @@ def main():
     test_calculate_score_cooldown()
     test_calculate_score_no_ingredients()
     test_calculate_score_partial_ingredients()
+    test_calculate_score_declaring_optionals_never_penalizes()
+    test_calculate_score_match_depends_on_present_count_only()
     test_calculate_score_recency_scaling()
 
     test_suggest_dishes_basic()

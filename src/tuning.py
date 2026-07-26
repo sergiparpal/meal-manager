@@ -32,7 +32,7 @@ PRIOR_REWARD_OTHER = 0.50   # seed reward for all other candidates
 MIN_OBSERVATIONS = 20       # cold start: below this, always deploy PRIOR_W
 HYSTERESIS_MARGIN = 0.03    # don't switch deploy unless clearly better
 
-VERSION = 1
+VERSION = 2
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +95,9 @@ def validate_state(raw) -> dict:
     corrupt file behaves exactly like a missing one.
     """
     if not isinstance(raw, dict):
+        return initialize_state()
+
+    if raw.get("version") != VERSION:
         return initialize_state()
 
     candidates = raw.get("candidates")
