@@ -551,6 +551,66 @@ def test_reject_unknown_args():
     check("extra_args widens the allowed set", widened)
 
 
+def test_safe_error_message():
+    print("\n-- _safe_error_message --")
+    import json as _json
+    safe = _handlers_common._safe_error_message
+
+    check("ValueError passes through verbatim",
+          safe(ValueError("dish name cannot be empty")) == "dish name cannot be empty")
+    check("LookupError passes through verbatim",
+          safe(LookupError("'paella' is not in the recipe catalog."))
+          == "'paella' is not in the recipe catalog.")
+    check("KeyError passes through (a LookupError subclass)",
+          safe(KeyError("dish_name")) == "'dish_name'")
+
+    check("OSError is replaced",
+          safe(OSError(13, "Permission denied", "/home/user/data/dishes.json"))
+          == "Storage is temporarily unavailable")
+    check("FileNotFoundError is replaced",
+          safe(FileNotFoundError(2, "No such file", "/srv/data/fridge.json"))
+          == "Storage is temporarily unavailable")
+
+    try:
+        _json.loads("{oops")
+        decode_exc = None
+    except _json.JSONDecodeError as exc:
+        decode_exc = exc
+    # JSONDecodeError subclasses ValueError, so ordering inside the mapper is
+    # what keeps it from leaking byte offsets into file contents.
+    check("JSONDecodeError is matched before ValueError",
+          decode_exc is not None and safe(decode_exc) == "Stored data could not be read",
+          f"got {safe(decode_exc) if decode_exc else 'no exception'}")
+
+    check("unanticipated types get the generic default",
+          safe(RuntimeError("connection to 10.0.0.4:5432 refused"))
+          == "An internal error occurred")
+    check("TypeError gets the generic default",
+          safe(TypeError("unsupported operand")) == "An internal error occurred")
+
+
+def test_tool_handler_sanitizes_envelope():
+    print("\n-- tool_handler (sanitized error envelope) --")
+    import json as _json
+    schema = {"type": "object", "properties": {}}
+
+    @_handlers_common.tool_handler("boom_os", schema)
+    def raises_oserror(args, **kwargs):
+        raise PermissionError(13, "Permission denied", "/home/user/data/dishes.json")
+
+    res = _json.loads(raises_oserror({}))
+    check("OSError envelope hides the path",
+          res == {"error": "Storage is temporarily unavailable"}, f"got {res}")
+
+    @_handlers_common.tool_handler("boom_value", schema)
+    def raises_valueerror(args, **kwargs):
+        raise ValueError("ingredients cannot be empty")
+
+    res2 = _json.loads(raises_valueerror({}))
+    check("deliberate ValueError still visible verbatim",
+          res2 == {"error": "ingredients cannot be empty"}, f"got {res2}")
+
+
 def test_tool_handler_validates_against_schema():
     print("\n-- tool_handler (schema-derived validation) --")
     schema = {"type": "object", "properties": {"a": {"type": "string"}}}
@@ -971,6 +1031,8 @@ def main():
 
     test_reject_unknown_args()
     test_tool_handler_validates_against_schema()
+    test_safe_error_message()
+    test_tool_handler_sanitizes_envelope()
 
     test_tuning_initial_state()
     test_tuning_deployed_weights_fallback()

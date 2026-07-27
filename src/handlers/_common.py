@@ -37,6 +37,30 @@ MAX_PORTION_COUNT = 99
 # of the success result, logging + structured error envelope on failure.
 # Handlers return Python objects and raise on validation/business errors.
 
+def _safe_error_message(exc: BaseException) -> str:
+    """Map an exception to the text that may leave the process.
+
+    Handlers raise ``ValueError`` / ``LookupError`` deliberately, with wording
+    written for the user, so those pass through verbatim. Everything else is
+    replaced: an ``OSError`` carries absolute filesystem paths and a
+    ``JSONDecodeError`` carries byte offsets into file contents, and both end up
+    in the model's context and the user's chat. The catch-all default is the
+    point — an unanticipated exception type is exactly the case where
+    ``str(exc)`` is most likely to publish something we did not mean to.
+
+    Full detail is still logged by the caller via ``logger.exception``.
+    """
+    # JSONDecodeError subclasses ValueError, so it must be tested first or it
+    # would never match.
+    if isinstance(exc, json.JSONDecodeError):
+        return "Stored data could not be read"
+    if isinstance(exc, (ValueError, LookupError)):
+        return str(exc)
+    if isinstance(exc, OSError):
+        return "Storage is temporarily unavailable"
+    return "An internal error occurred"
+
+
 def reject_unknown_args(args: dict, allowed: set[str]) -> None:
     """Raise unless every key in *args* is declared in *allowed*.
 
@@ -58,7 +82,8 @@ def tool_handler(name: str, schema: dict | None = None, *, extra_args: set | Non
     The wrapped function returns a Python object (dict, list, str, ...). On
     success it is encoded with ``json.dumps(..., ensure_ascii=False)``. Any
     exception is logged via ``logger.exception`` and surfaced as
-    ``{"error": ...}`` so all tool errors share one shape.
+    ``{"error": ...}`` so all tool errors share one shape; the message itself
+    goes through :func:`_safe_error_message`.
 
     When *schema* is supplied, incoming ``args`` keys are validated against
     ``schema["properties"]`` (widened by *extra_args*) before the handler runs.
@@ -82,7 +107,9 @@ def tool_handler(name: str, schema: dict | None = None, *, extra_args: set | Non
                 return json.dumps(fn(args, **kwargs), ensure_ascii=False)
             except Exception as exc:
                 log.exception("%s failed", name)
-                return json.dumps({"error": str(exc)}, ensure_ascii=False)
+                return json.dumps(
+                    {"error": _safe_error_message(exc)}, ensure_ascii=False
+                )
 
         return runner
 

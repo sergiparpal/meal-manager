@@ -415,6 +415,11 @@ def test_register_cooked_meal_bogus():
     print("\n-- register_cooked_meal (nonexistent dish) --")
     result = parse(register_cooked_meal({"dish_name": "Plato Inventado"}))
     check("returns error", isinstance(result, dict) and "error" in result, f"got: {result}")
+    # Sanitizing the envelope must not over-reach: a LookupError raised
+    # deliberately by a handler is user-facing text and stays verbatim.
+    check("LookupError message survives sanitization",
+          "Plato Inventado" in result.get("error", "")
+          and "catalog" in result.get("error", ""), f"got: {result}")
 
 
 def test_register_cooked_meal_rollback():
