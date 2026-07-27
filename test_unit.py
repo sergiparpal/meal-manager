@@ -130,6 +130,49 @@ def test_dish_from_dict():
     check("missing ingredients = empty dict", dish3.ingredients == {})
 
 
+def test_dish_instructions():
+    print("\n-- Dish.instructions --")
+    plain = Dish(name="pasta", ingredients={"pasta": True})
+    check("defaults to None", plain.instructions is None)
+    check("to_dict omits the key entirely when unset",
+          "instructions" not in plain.to_dict(), f"got {plain.to_dict()}")
+
+    dish = Dish(name="pasta", ingredients={"pasta": True},
+                instructions="  Boil water. Add pasta.  ")
+    check("stored stripped", dish.instructions == "Boil water. Add pasta.")
+    check("to_dict emits the key when set",
+          dish.to_dict().get("instructions") == "Boil water. Add pasta.")
+
+    blank = Dish(name="pasta", instructions="   \n  ")
+    check("whitespace-only normalizes to None", blank.instructions is None)
+    check("blank still omitted from to_dict", "instructions" not in blank.to_dict())
+
+    try:
+        Dish(name="pasta", instructions="x" * (_dish_mod.MAX_INSTRUCTIONS_LENGTH + 1))
+        check("over-length raises", False, "should have raised ValueError")
+    except ValueError as exc:
+        check("over-length raises ValueError", "too long" in str(exc), str(exc))
+
+    # Length is checked after stripping, so padding alone cannot trip the cap.
+    padded = Dish(name="pasta",
+                  instructions="  " + "x" * _dish_mod.MAX_INSTRUCTIONS_LENGTH + "  ")
+    check("length checked after stripping",
+          len(padded.instructions) == _dish_mod.MAX_INSTRUCTIONS_LENGTH)
+
+    for bad in (42, ["step one"], {"step": 1}, True):
+        try:
+            Dish(name="pasta", instructions=bad)
+            check(f"non-string {type(bad).__name__} raises", False, "no exception")
+        except ValueError:
+            check(f"non-string {type(bad).__name__} raises", True)
+
+    round_tripped = Dish.from_dict(dish.to_dict())
+    check("from_dict(to_dict(dish)) preserves instructions",
+          round_tripped.instructions == "Boil water. Add pasta.")
+    check("from_dict without the key yields None",
+          Dish.from_dict({"name": "x", "ingredients": {"a": True}}).instructions is None)
+
+
 def test_dish_from_dict_invalid():
     print("\n-- Dish.from_dict (invalid) --")
     try:
@@ -993,6 +1036,7 @@ def main():
     test_dish_add_ingredient_validation()
     test_dish_ingredient_keys_normalized_on_construction()
     test_dish_rejects_colliding_ingredient_keys()
+    test_dish_instructions()
 
     test_calculate_score_basic()
     test_calculate_score_cooldown()

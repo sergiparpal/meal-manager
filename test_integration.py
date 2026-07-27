@@ -163,6 +163,8 @@ dii_clear_all = _load_handler("dii_clear_all")
 finalize_ingredient_session = _load_handler("finalize_ingredient_session")
 dii_get_state = _load_handler("dii_get_state")
 get_tuning_state = _load_handler("get_tuning_state")
+set_dish_instructions = _load_handler("set_dish_instructions")
+get_dish_recipe = _load_handler("get_dish_recipe")
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -835,6 +837,101 @@ def test_missing_required_arg_message():
           and "required" in res2["error"].lower(), f"got: {res2}")
 
 
+def test_dish_instructions_roundtrip():
+    print("\n-- set_dish_instructions / get_dish_recipe --")
+    add_dish({
+        "name": "Recipe Test",
+        "ingredients": {"harina": True, "azucar": False},
+    })
+
+    res = parse(set_dish_instructions({
+        "dish_name": "Recipe Test",
+        "instructions": "  Mix, then bake 30 min at 180C.  ",
+    }))
+    check("set reports the stored text",
+          res.get("instructions") == "Mix, then bake 30 min at 180C.", f"got: {res}")
+    check("set reports cleared=False", res.get("cleared") is False, f"got: {res}")
+
+    recipe = parse(get_dish_recipe({"dish_name": "recipe test"}))
+    check("recipe returns the instructions",
+          recipe.get("instructions") == "Mix, then bake 30 min at 180C.", f"got: {recipe}")
+    check("recipe splits essential/optional",
+          recipe.get("essential") == ["harina"] and recipe.get("optional") == ["azucar"],
+          f"got: {recipe}")
+
+    cleared = parse(set_dish_instructions({
+        "dish_name": "Recipe Test",
+        "instructions": None,
+    }))
+    check("null clears", cleared.get("cleared") is True
+          and cleared.get("instructions") is None, f"got: {cleared}")
+    after = parse(get_dish_recipe({"dish_name": "Recipe Test"}))
+    check("recipe reports None after clearing",
+          after.get("instructions") is None, f"got: {after}")
+
+
+def test_edit_dish_preserves_instructions():
+    print("\n-- edit_dish preserves instructions --")
+    add_dish({"name": "Preserve Test", "ingredients": {"a": True}})
+    set_dish_instructions({
+        "dish_name": "Preserve Test",
+        "instructions": "Step one. Step two.",
+    })
+
+    edit_dish({"dish_name": "Preserve Test", "ingredients": {"a": True, "b": False}})
+
+    recipe = parse(get_dish_recipe({"dish_name": "Preserve Test"}))
+    check("instructions survive an ingredient edit",
+          recipe.get("instructions") == "Step one. Step two.", f"got: {recipe}")
+    check("ingredients actually changed",
+          recipe.get("optional") == ["b"], f"got: {recipe}")
+
+
+def test_dish_instructions_errors():
+    print("\n-- set_dish_instructions / get_dish_recipe (errors) --")
+    res = parse(set_dish_instructions({
+        "dish_name": "No Such Dish",
+        "instructions": "anything",
+    }))
+    check("unknown dish returns an error envelope",
+          "error" in res and "No Such Dish" in res["error"], f"got: {res}")
+
+    res2 = parse(get_dish_recipe({"dish_name": "No Such Dish"}))
+    check("get_dish_recipe on unknown dish errors",
+          "error" in res2, f"got: {res2}")
+
+    res3 = parse(set_dish_instructions({"dish_name": "Recipe Test"}))
+    check("missing 'instructions' is required, not defaulted",
+          "error" in res3 and "instructions" in res3["error"], f"got: {res3}")
+
+    res4 = parse(set_dish_instructions({
+        "dish_name": "Recipe Test",
+        "instructions": 42,
+    }))
+    check("non-string instructions rejected",
+          "error" in res4 and "string" in res4["error"], f"got: {res4}")
+
+
+def test_add_dish_with_instructions():
+    print("\n-- add_dish (instructions argument) --")
+    add_dish({
+        "name": "Inline Recipe",
+        "ingredients": ["agua"],
+        "instructions": "Boil it.",
+    })
+    recipe = parse(get_dish_recipe({"dish_name": "Inline Recipe"}))
+    check("instructions stored at creation time",
+          recipe.get("instructions") == "Boil it.", f"got: {recipe}")
+
+    # A dish added without instructions must not write the key at all, so an
+    # existing dishes.json round-trips with no diff.
+    add_dish({"name": "No Recipe", "ingredients": ["agua"]})
+    raw = json.loads((_TMP_DATA_DIR / "dishes.json").read_text(encoding="utf-8"))
+    row = next(d for d in raw["dishes"] if d.get("name") == "no recipe")
+    check("dish without instructions omits the key on disk",
+          "instructions" not in row, f"got: {row}")
+
+
 def test_unknown_argument_rejected():
     print("\n-- validation: unknown arguments are rejected --")
     res = parse(add_dish({
@@ -1133,6 +1230,10 @@ def main():
         # cannot perturb the catalog the earlier assertions depend on.
         test_missing_required_arg_message()
         test_unknown_argument_rejected()
+        test_dish_instructions_roundtrip()
+        test_edit_dish_preserves_instructions()
+        test_dish_instructions_errors()
+        test_add_dish_with_instructions()
         test_add_dishes_batch_partial_failure()
         test_dii_remove_optional_no_recalc()
         test_edit_dish_empty_rejected()

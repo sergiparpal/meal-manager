@@ -47,6 +47,10 @@ SCHEMA = {
                             "(all essential)."
                         ),
                     },
+                    "instructions": {
+                        "type": ["string", "null"],
+                        "description": "optional cooking steps for the dish",
+                    },
                 },
                 "required": ["name", "ingredients"],
             },
@@ -83,7 +87,7 @@ def HANDLER(args: dict, **kwargs):
                     skipped.append(name)
                     continue
                 ingredients = normalize_ingredients(require_arg(entry, "ingredients"))
-                new_dish = Dish(name=name)
+                new_dish = Dish(name=name, instructions=entry.get("instructions"))
                 for ing, essential in ingredients.items():
                     new_dish.add_ingredient(ing, essential)
                 dishes.append(new_dish)

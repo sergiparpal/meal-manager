@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+MAX_INSTRUCTIONS_LENGTH = 20_000
+
 
 @dataclass
 class Dish:
@@ -9,13 +11,18 @@ class Dish:
     ``__post_init__`` enforces this on every construction path (direct,
     ``from_dict``, dataclass replace), so consumers can compare ``dish.name``
     by equality without re-normalizing.
+
+    ``instructions`` is free-form cooking text (or ``None``). It sits after
+    ``ingredients`` so existing positional construction is unaffected.
     """
 
     name: str
     ingredients: dict = field(default_factory=dict)
+    instructions: str | None = None
 
     def __post_init__(self):
         self.name = self.normalize_name(self.name)
+        self.instructions = self.normalize_instructions(self.instructions)
         # Enforce the same normalization invariant on ingredient keys for every
         # construction path (direct, dataclasses.replace, …), so consumers can
         # compare against the always-lowercased fridge without re-normalizing.
@@ -47,6 +54,26 @@ class Dish:
     def normalize_name(name):
         return Dish._clean(name, label="dish name")
 
+    @staticmethod
+    def normalize_instructions(value):
+        """Validate free-form cooking text; blank collapses to ``None``.
+
+        "Cleared" and "never set" are the same state, so an empty string is not
+        allowed to persist as a second representation of it.
+        """
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("instructions must be a string or null")
+        text = value.strip()
+        if not text:
+            return None
+        if len(text) > MAX_INSTRUCTIONS_LENGTH:
+            raise ValueError(
+                f"instructions too long (max {MAX_INSTRUCTIONS_LENGTH} chars)"
+            )
+        return text
+
     def add_ingredient(self, ingredient_name, is_essential=True):
         if not isinstance(is_essential, bool):
             raise ValueError("ingredient essential flag must be a boolean")
@@ -62,10 +89,15 @@ class Dish:
         return True
 
     def to_dict(self):
-        return {
+        data = {
             "name": self.name,
             "ingredients": self.ingredients
         }
+        # Emitted only when set, so a catalog with no instructions round-trips
+        # byte-identically and this field causes no diff churn in dishes.json.
+        if self.instructions is not None:
+            data["instructions"] = self.instructions
+        return data
 
     @classmethod
     def from_dict(cls, data):
@@ -80,7 +112,7 @@ class Dish:
         if not isinstance(raw_ingredients, dict):
             raise ValueError("ingredients must be a dict")
 
-        dish = cls(name=name)
+        dish = cls(name=name, instructions=data.get("instructions"))
         for ingredient_name, is_essential in raw_ingredients.items():
             dish.add_ingredient(ingredient_name, is_essential)
         return dish

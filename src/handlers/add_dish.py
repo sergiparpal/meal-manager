@@ -42,6 +42,13 @@ SCHEMA = {
                 "plain list of ingredient names (all treated as essential)."
             ),
         },
+        "instructions": {
+            "type": ["string", "null"],
+            "description": (
+                "Optional cooking steps for the dish. Can also be set later "
+                "with set_dish_instructions."
+            ),
+        },
     },
     "required": ["name", "ingredients"],
 }
@@ -51,13 +58,14 @@ SCHEMA = {
 def HANDLER(args: dict, **kwargs):
     ingredients = normalize_ingredients(require_arg(args, "ingredients"))
     name = normalize_dish_name(require_arg(args, "name"))
+    instructions = args.get("instructions")
 
     with dish_repo.lock:
         dishes = dish_repo.load()
         if any(d.name == name for d in dishes):
             raise ValueError(f"a dish called '{name}' already exists in the catalog.")
 
-        new_dish = Dish(name=name)
+        new_dish = Dish(name=name, instructions=instructions)
         for ing, essential in ingredients.items():
             new_dish.add_ingredient(ing, essential)
         dishes.append(new_dish)
