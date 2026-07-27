@@ -165,6 +165,7 @@ dii_get_state = _load_handler("dii_get_state")
 get_tuning_state = _load_handler("get_tuning_state")
 set_dish_instructions = _load_handler("set_dish_instructions")
 get_dish_recipe = _load_handler("get_dish_recipe")
+list_cooking_history = _load_handler("list_cooking_history")
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -919,6 +920,90 @@ def test_delete_history_entry_releases_the_cooldown():
           any(s["dish"] == "cooldown dish" for s in freed), f"got {freed}")
 
 
+def test_list_cooking_history():
+    print("\n-- list_cooking_history --")
+    # A self-contained log: wipe history so the assertions are exact.
+    (_TMP_DATA_DIR / "history.json").write_text(
+        json.dumps({"schema_version": 2, "events": []}), encoding="utf-8"
+    )
+    empty = parse(list_cooking_history({}))
+    check("empty history returns no rows",
+          empty.get("events") == [] and empty.get("count") == 0, f"got {empty}")
+
+    add_dish({"name": "Hist One", "ingredients": {"h_a": True}})
+    add_dish({"name": "Hist Two", "ingredients": {"h_b": True}})
+    update_fridge_inventory({"action": "set", "ingredients": {"h_a": 9, "h_b": 9}})
+    register_cooked_meal({"dish_name": "Hist One"})
+    register_cooked_meal({"dish_name": "Hist Two"})
+
+    res = parse(list_cooking_history({}))
+    names = [e["dish_name"] for e in res["events"]]
+    check("both cooks listed", set(names) == {"hist one", "hist two"}, f"got {names}")
+    check("newest first", names[0] == "hist two", f"got {names}")
+    check("rows carry a derived status",
+          all(e["status"] == "active" for e in res["events"]), f"got {res}")
+
+    filtered = parse(list_cooking_history({"dish_name": "Hist One"}))
+    check("dish_name filters and normalizes its input",
+          [e["dish_name"] for e in filtered["events"]] == ["hist one"], f"got {filtered}")
+
+    limited = parse(list_cooking_history({"limit": 1}))
+    check("limit truncates", limited["count"] == 1, f"got {limited}")
+    check("truncation is reported", limited["truncated"] is True, f"got {limited}")
+
+    exact = parse(list_cooking_history({"limit": 2}))
+    check("an exact-fit limit is not reported as truncated",
+          exact["count"] == 2 and exact["truncated"] is False, f"got {exact}")
+
+    delete_history_entry({"dish_name": "Hist Two"})
+    with_retracted = parse(list_cooking_history({"include_retracted": True}))
+    check("retracted events are shown by default",
+          any(e["status"] == "retracted" for e in with_retracted["events"]),
+          f"got {with_retracted}")
+    without = parse(list_cooking_history({"include_retracted": False}))
+    check("include_retracted=False hides them",
+          all(e["status"] == "active" for e in without["events"])
+          and without["count"] == 1, f"got {without}")
+
+
+def test_list_cooking_history_validation():
+    print("\n-- list_cooking_history (validation) --")
+    for bad_limit in (0, 1001, -5):
+        res = parse(list_cooking_history({"limit": bad_limit}))
+        check(f"limit={bad_limit} rejected",
+              "error" in res and "limit" in res["error"], f"got {res}")
+
+    # isinstance(True, int) is True in Python, so a bool must not slip through
+    # as limit=1.
+    res = parse(list_cooking_history({"limit": True}))
+    check("limit=true rejected as a non-integer",
+          "error" in res and "integer" in res["error"], f"got {res}")
+
+    res2 = parse(list_cooking_history({"limit": "10"}))
+    check("string limit rejected", "error" in res2, f"got {res2}")
+
+    res3 = parse(list_cooking_history({"include_retracted": "yes"}))
+    check("non-boolean include_retracted rejected",
+          "error" in res3 and "include_retracted" in res3["error"], f"got {res3}")
+
+    res4 = parse(list_cooking_history({"unknown": 1}))
+    check("unknown argument rejected", "error" in res4, f"got {res4}")
+
+
+def test_list_cooking_history_surfaces_corruption():
+    print("\n-- list_cooking_history (corrupt storage) --")
+    original = (_TMP_DATA_DIR / "history.json").read_text(encoding="utf-8")
+    try:
+        (_TMP_DATA_DIR / "history.json").write_text("{not json", encoding="utf-8")
+        res = parse(list_cooking_history({}))
+        # An empty list here would read as "you have never cooked anything",
+        # which is a different and much worse answer than "I cannot read this".
+        check("corrupt history surfaces as an error, not an empty log",
+              "error" in res, f"got {res}")
+    finally:
+        (_TMP_DATA_DIR / "history.json").write_text(original, encoding="utf-8")
+
+
 def test_dish_instructions_roundtrip():
     print("\n-- set_dish_instructions / get_dish_recipe --")
     add_dish({
@@ -1315,6 +1400,9 @@ def main():
         test_history_event_log_on_disk()
         test_history_rollback_hard_deletes_the_event()
         test_delete_history_entry_releases_the_cooldown()
+        test_list_cooking_history()
+        test_list_cooking_history_validation()
+        test_list_cooking_history_surfaces_corruption()
         test_dish_instructions_roundtrip()
         test_edit_dish_preserves_instructions()
         test_dish_instructions_errors()
