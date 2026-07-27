@@ -1,6 +1,6 @@
 # Implementation Plan — Adopting Tier 1–3 Improvements from the `KoryakovDmitry/meal-manager` Fork
 
-**Status:** ready for implementation
+**Status:** complete — all eight stages are implemented and merged to `main` (`047e192`…`0eb2a68`). Kept as the historical record of why each change was made and in what order; the current behavior is documented in `CLAUDE.md`, `AGENTS.md`, `README.md` and `skill.md`, which take precedence wherever this plan and the code disagree.
 **Target repo:** this repository (`sergiparpal/meal-manager`, branch `main`)
 **Audience:** an autonomous coding agent (Claude Code) with no prior context on this conversation
 **Human involvement:** exactly one question block at Stage 0. Everything after that runs unattended.

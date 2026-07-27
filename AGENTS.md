@@ -124,7 +124,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 - Use `atomic_write_json` from `src/__init__.py` for every JSON write.
 - Keep persisted file formats stable.
 - Create parent directories lazily when needed, not at import time.
-- Treat missing or malformed JSON files as empty state unless the caller needs an explicit error.
+- Treat missing or malformed JSON files as empty state unless the caller needs an explicit error. "Malformed" includes valid JSON of the wrong *shape* — check `isinstance` before reading attributes off parsed data. A DII session backup containing an array raised `AttributeError` out of the orphan sweep and took down every DII tool, including the sweep that would have cleaned it up.
 - Use UTF-8 for all file I/O.
 - Do not store transient scratch data in `data/` unless the feature explicitly needs persistence.
 - The data directory is injectable. `src/repositories/__init__.py:configure(data_dir)` and `src/dii/__init__.py:configure(session_dir)` redirect the singletons in place; the top-level `register(ctx, *, data_dir=None)` wires both. Tests should never hit the real `data/` — use a tmp dir via `_setup_tmp_data` / `configure`.

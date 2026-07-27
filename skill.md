@@ -59,10 +59,10 @@ Adds, removes, or sets fridge ingredients. The fridge tracks approximate **porti
 
 A count of `null` marks a **pantry staple** — something that never runs out (salt, oil, spices). Staples are never decremented when a meal is cooked.
 
-To record an expiry date, map the name to an object instead: `{"milk": {"count": 2, "expires_on": "2026-08-01"}}`. Omitting `expires_on` on a later update leaves any stored date alone — a routine restock never silently erases it — while passing `null` clears it. Record a date whenever the user volunteers one ("the milk goes off Friday"); do not invent one.
+To record an expiry date, map the name to an object instead: `{"milk": {"count": 2, "expires_on": "2026-08-01"}}`. Omitting `expires_on` on a later update leaves any stored date alone — a routine restock never silently erases it — while passing `null` clears it. Record a date whenever the user volunteers one ("the milk goes off Friday"); do not invent one. A date sent with an "add" onto a pantry staple is still recorded, even though the count stays unlimited.
 
 - **When to use:**
-  - The user says they bought something -> action "add" (counts accumulate: adding 2 onions to 1 gives 3).
+  - The user says they bought something -> action "add" (counts accumulate: adding 2 onions to 1 gives 3, up to a stored ceiling of 99 portions).
   - The user says an ingredient is gone and they don't stock it -> action "remove" (deletes it entirely).
   - The user lists what they have and wants to update it.
 - **Directive:** when the user corrects an estimate ("I actually have two onions left", "I've only got one portion of rice"), use `set`, not `add`. `set` overwrites the count outright — including to `0` for "I ran out" and to `null` for "this is a staple I always have". Using `add` here would compound the error rather than correct it.
@@ -102,7 +102,7 @@ Lists recorded cook events, most recent first. Each row carries the dish, the da
 
 Declares that two ingredient names mean the same thing and merges them. Rewrites every recipe and the fridge to use the canonical name, then remembers the alias so anything typed later canonicalizes itself. Takes `from_name` (the spelling to retire) and `to_name` (the one to keep).
 
-Where a recipe listed both, essential wins over optional. Where the fridge held both, the counts add up and a pantry staple wins over any number.
+Where a recipe listed both, essential wins over optional. Where the fridge held both, the counts add up (clamped at the 99-portion ceiling) and a pantry staple wins over any number.
 
 - **When to use:**
   - The user says two entries are the same thing ("tomate and tomates are the same", "that's just what I call olive oil").
@@ -331,5 +331,6 @@ Confirm:
 
 - `ingredients`: array of names, ordered from most to least relevant
 - `is_essential`: parallel array of booleans (true = essential, false = optional)
-- `pre_select_top_n`: how many to auto-select (default: 3)
+- `pre_select_top_n`: how many to auto-select (default: 3). Must be a non-negative integer. A value that isn't one is rejected outright rather than quietly replaced with the default — omit the key if you want 3, don't send a placeholder.
 - The order defines the priority ranking
+- Ingredient names are canonicalized as the session is built, so a name previously merged via `merge_ingredient_alias` is stored under its canonical spelling. The session can therefore echo back a name different from the one you sent: present what the tool returns, not what you typed. `dii_remove_ingredient` resolves aliases too, so either spelling removes the right ingredient.

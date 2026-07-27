@@ -35,7 +35,7 @@ The result is a system that offers the user the freedom of conversation while gu
 - **Portion Accounting on Cook** — When a meal is registered as cooked, one portion of each essential ingredient is consumed from the fridge. An ingredient you had plenty of stays available; one that runs out is remembered as out of stock rather than silently deleted.
 - **Essential vs. Optional Ingredients** — Recipes distinguish between must-have ingredients (required to cook) and nice-to-have ingredients (boost the suggestion score but are not blocking).
 - **Cooking Instructions** — Recipes can carry free-form cooking steps alongside their ingredients. `set_dish_instructions` records or clears them, `get_dish_recipe` reads the whole recipe back, and editing a dish's ingredients leaves the steps untouched.
-- **Ingredient Aliases** — "tomato", "tomatoes" and "roma tomato" stop being three different things. `merge_ingredient_alias` rewrites the catalog and fridge once to use a single canonical name, then remembers the alias so anything you type later canonicalizes itself. Where a recipe listed both spellings, essential wins over optional; where the fridge held both, the counts add up.
+- **Ingredient Aliases** — "tomato", "tomatoes" and "roma tomato" stop being three different things. `merge_ingredient_alias` rewrites the catalog and fridge once to use a single canonical name, then remembers the alias so anything you type later canonicalizes itself. Where a recipe listed both spellings, essential wins over optional; where the fridge held both, the counts add up under the same per-ingredient ceiling any other update respects.
 - **Expiry Awareness** — Fridge entries can carry a `expires_on` date. `list_fridge` reports what is expiring within three days and what has already passed. Expired items are flagged, never removed — the date is your estimate, not ground truth, and deleting your food is not a call the tool gets to make.
 - **Dynamic Ingredient Interface (DII)** — Interactive, stateful ingredient selection via plain text conversation. A "probability funnel" reveals ranked ingredient suggestions one at a time. The agent interprets free-text user responses (e.g. "yes", "skip", "add X") to drive add/skip/remove/manual-add controls. Removing an essential ingredient triggers a recalculation signal so the agent can re-evaluate suggestions.
 
@@ -224,6 +224,7 @@ meal-manager/
 │   ├── suggestion.py          # Scoring engine — ranks dishes by availability + recency
 │   ├── shopping.py            # Shopping suggestions — near-miss unlock logic, cheapest basket first
 │   ├── tuning.py              # Online learner — self-adjusts the availability/recency blend
+│   ├── history_event.py       # CookingEvent dataclass — one recorded cook, pure data
 │   ├── handlers/              # One module per registered tool (NAME, SCHEMA, HANDLER)
 │   │   ├── __init__.py                     # iter_tools() walks the package and yields each triple
 │   │   ├── _common.py                      # Shared helpers (tool_handler decorator, normalization, input limits)
@@ -233,12 +234,17 @@ meal-manager/
 │   │   ├── get_tuning_state.py             # Read-only report of the self-adjusted suggestion weights
 │   │   ├── update_fridge_inventory.py      # Add, remove, or set fridge ingredients and portion counts
 │   │   ├── register_cooked_meal.py         # Log a dish as cooked and consume one portion of each essential
-│   │   ├── delete_history_entry.py         # Undo a cooked-meal entry from history
+│   │   ├── delete_history_entry.py         # Retract the most recent cook of a dish
+│   │   ├── list_cooking_history.py         # List recorded cook events, newest first
 │   │   ├── list_fridge.py                  # Return the current fridge contents with portion counts
 │   │   ├── add_dish.py                     # Add a new recipe to the catalog
 │   │   ├── add_dishes_batch.py             # Add multiple recipes in a single call
 │   │   ├── delete_dish.py                  # Remove a recipe from the catalog
 │   │   ├── edit_dish.py                    # Replace the ingredient list of an existing recipe
+│   │   ├── set_dish_instructions.py        # Set or clear a dish's cooking steps
+│   │   ├── get_dish_recipe.py              # Return one dish's essentials, optionals, and steps
+│   │   ├── merge_ingredient_alias.py       # Merge two spellings of one ingredient
+│   │   ├── list_ingredient_aliases.py      # List the alias mappings recorded so far
 │   │   ├── clear_fridge.py                 # Empty the fridge inventory
 │   │   ├── init_ingredient_session.py      # Start a DII session with ranked suggestions
 │   │   ├── dii_add_suggested.py            # Accept the current DII suggestion and reveal the next
@@ -250,10 +256,11 @@ meal-manager/
 │   │   └── finalize_ingredient_session.py  # Commit the DII session to fridge and/or dish catalog
 │   ├── repositories/          # Persistence layer behind Protocol seams
 │   │   ├── __init__.py        # Singletons + configure(data_dir)
-│   │   ├── base.py            # DishRepository / FridgeRepository / HistoryRepository / TuningRepository
+│   │   ├── base.py            # Dish / Fridge / History / Alias / Tuning repository Protocols
 │   │   ├── json_dish.py       # Recipe catalog persistence (data/dishes.json)
 │   │   ├── json_fridge.py     # Fridge inventory persistence (data/fridge.json)
-│   │   ├── json_history.py    # Cooking history persistence (data/history.json)
+│   │   ├── json_history.py    # Cooking-event log persistence (data/history.json)
+│   │   ├── json_alias.py      # Ingredient alias map persistence (data/aliases.json)
 │   │   └── json_tuning.py     # Online-learner state persistence (data/tuning.json)
 │   └── dii/                   # Dynamic Ingredient Interface
 │       ├── __init__.py        # Public API + configure(session_dir)
@@ -263,9 +270,10 @@ meal-manager/
 │       ├── presenter.py       # LLM-facing response shape
 │       └── finalizer.py       # Commits a session via injected repositories
 ├── data/
-│   ├── dishes.json            # Recipe catalog (dishes with ingredients)
-│   ├── fridge.json            # Fridge inventory (ingredient → portion count; null = staple)
-│   ├── history.json           # Cooking history (dish name → last-cooked ISO date)
+│   ├── dishes.json            # Recipe catalog (dishes with ingredients and optional instructions)
+│   ├── fridge.json            # Fridge inventory (ingredient → portion count or {count, expires_on})
+│   ├── history.json           # Cooking history (append-only log of cook events)
+│   ├── aliases.json           # (created lazily) Ingredient aliases (alias → canonical)
 │   ├── tuning.json            # (created lazily) Online-learner state for the suggestion blend
 │   └── sessions/              # (created lazily) DII session backups for crash recovery
 ├── .github/
@@ -277,6 +285,7 @@ meal-manager/
 ├── test_integration.py        # Integration smoke test
 ├── skill.md                   # Prompt instructions defining when/how to call each tool
 ├── AGENTS.md                  # Repository guidance for agentic coding work
+├── IMPLEMENTATION_PLAN.md     # Historical record of the tier 1–3 fork adoption (complete)
 ├── CLAUDE.md                  # Development guidelines for Claude Code
 ├── LICENSE                    # GPLv3 license text
 └── README.md                  # This file — project overview and usage guide
@@ -318,6 +327,7 @@ meal-manager/
 - `null` = pantry staple: unlimited, never decremented (salt, oil, spices).
 - `0` = known to be out of stock. Kept deliberately — "ran out" is more informative than "never had it", and `list_fridge` reports these separately under `out_of_stock`.
 - An entry may instead be an object carrying an expiry date alongside the count. Entries with no expiry stay bare scalars, so adding this feature does not rewrite files that do not use it. An unreadable date costs the date, not the ingredient.
+- A stored count is capped at `MAX_PORTION_COUNT` (99). The ceiling bounds the stored total rather than the number sent in one call, so repeated restocking clamps at 99 instead of walking past it, and an out-of-band count in a hand-edited file is normalized the next time it is merged.
 
 > **Format change.** `fridge.json` was previously a flat array of names (`["potatoes", "eggs", "rice"]`). Existing files are migrated automatically the first time they are loaded — each name becomes one portion — and rewritten in the new shape on the next save. No manual migration step is required, and every shape is accepted indefinitely.
 
