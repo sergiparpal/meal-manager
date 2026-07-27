@@ -522,6 +522,173 @@ def test_fridge_repository_non_finite_counts():
         _shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_expiry_status():
+    print("\n-- expiry_status --")
+    from datetime import date as _date, timedelta as _timedelta
+    _json_fridge = importlib.import_module(".src.repositories.json_fridge",
+                                           _PLUGIN_DIR.name)
+    status = _json_fridge.expiry_status
+    soon_days = _json_fridge.EXPIRING_SOON_DAYS
+    today = _date(2026, 7, 27)
+
+    def at(offset):
+        return (today + _timedelta(days=offset)).isoformat()
+
+    check("no date yields no status", status(None, today) is None)
+    check("expiring today counts as expiring soon, not expired",
+          status(at(0), today) == "expiring_soon")
+    check("the last day inside the window is expiring soon",
+          status(at(soon_days), today) == "expiring_soon")
+    check("one day past the window is fresh",
+          status(at(soon_days + 1), today) == "fresh")
+    check("yesterday is expired", status(at(-1), today) == "expired")
+    check("far future is fresh", status(at(365), today) == "fresh")
+    check("unreadable dates are treated as no date",
+          status("not-a-date", today) is None)
+    check("accepts a date object", status(today, today) == "expiring_soon")
+
+
+def test_fridge_entries_grammar():
+    print("\n-- JsonFridgeRepository.load_entries / save_entries --")
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_fridge_"))
+    try:
+        path = tmp / "fridge.json"
+        repo = _repos_mod.JsonFridgeRepository(path)
+
+        path.write_text(json.dumps({
+            "milk": {"count": 2, "expires_on": "2026-08-01"},
+            "salt": None,
+            "onion": 3,
+            "gone": 0,
+        }), encoding="utf-8")
+
+        entries = repo.load_entries()
+        check("object form parsed",
+              entries["milk"] == {"count": 2, "expires_on": "2026-08-01"},
+              f"got {entries}")
+        check("legacy scalar loads with no expiry",
+              entries["onion"] == {"count": 3, "expires_on": None}, f"got {entries}")
+        check("null still means pantry staple",
+              entries["salt"] == {"count": None, "expires_on": None}, f"got {entries}")
+
+        # Invariant 3: the count-only view is unchanged.
+        check("load() keeps its {name: count} contract",
+              repo.load() == {"milk": 2, "salt": None, "onion": 3, "gone": 0},
+              f"got {repo.load()}")
+        check("load_set() is unaffected by expiry",
+              repo.load_set() == {"milk", "salt", "onion"}, f"got {repo.load_set()}")
+
+        repo.save_entries(entries)
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        # Entries without an expiry must stay bare scalars or every existing
+        # fridge.json would churn the moment anything touched it.
+        check("no-expiry entries round-trip as bare scalars",
+              raw["onion"] == 3 and raw["salt"] is None and raw["gone"] == 0,
+              f"got {raw}")
+        check("expiry entries round-trip as objects",
+              raw["milk"] == {"count": 2, "expires_on": "2026-08-01"}, f"got {raw}")
+
+        # A mistyped date must cost the date, not the food.
+        path.write_text(json.dumps({"cheese": {"count": 1, "expires_on": "08/2026"}}),
+                        encoding="utf-8")
+        check("unreadable expires_on keeps the ingredient",
+              repo.load_entries() == {"cheese": {"count": 1, "expires_on": None}},
+              f"got {repo.load_entries()}")
+
+        # The non-finite guard has to apply inside the object form too.
+        path.write_text('{"a": {"count": NaN}, "b": {"count": Infinity}, "c": 2}',
+                        encoding="utf-8")
+        check("non-finite counts dropped in the object form too",
+              repo.load_entries() == {"c": {"count": 2, "expires_on": None}},
+              f"got {repo.load_entries()}")
+
+        # An object without a count means one portion, exactly like a list entry.
+        path.write_text(json.dumps({"bread": {"expires_on": "2026-08-01"}}),
+                        encoding="utf-8")
+        check("object without a count means one portion",
+              repo.load_entries()["bread"]["count"] == 1, f"got {repo.load_entries()}")
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_fridge_mutations_preserve_expiry():
+    print("\n-- JsonFridgeRepository: mutations keep expiry --")
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_fridge_"))
+    try:
+        path = tmp / "fridge.json"
+        repo = _repos_mod.JsonFridgeRepository(path)
+        repo.save_entries({
+            "milk": {"count": 2, "expires_on": "2026-08-01"},
+            "salt": {"count": None, "expires_on": None},
+        })
+
+        # consume() works off the count-only view; writing that back verbatim
+        # would silently erase every date on the way out.
+        repo.consume(["milk"])
+        check("consume decrements without losing the date",
+              repo.load_entries()["milk"] == {"count": 1, "expires_on": "2026-08-01"},
+              f"got {repo.load_entries()}")
+
+        repo.restore_counts({"milk": 2})
+        check("restore_counts keeps the date",
+              repo.load_entries()["milk"] == {"count": 2, "expires_on": "2026-08-01"},
+              f"got {repo.load_entries()}")
+
+        repo.save({"milk": 5, "salt": None})
+        check("count-only save keeps the date",
+              repo.load_entries()["milk"] == {"count": 5, "expires_on": "2026-08-01"},
+              f"got {repo.load_entries()}")
+
+        repo.remove_items(["milk"])
+        check("remove_items drops the whole entry",
+              "milk" not in repo.load_entries(), f"got {repo.load_entries()}")
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_normalize_ingredient_entries():
+    print("\n-- normalize_ingredient_entries --")
+    entries = _handlers_common.normalize_ingredient_entries
+    check("list means one portion each",
+          entries(["Milk", "eggs"]) == {"milk": {"count": 1}, "eggs": {"count": 1}},
+          f"got {entries(['Milk', 'eggs'])}")
+    check("counts and staples pass through",
+          entries({"a": 3, "salt": None}) == {"a": {"count": 3}, "salt": {"count": None}},
+          f"got {entries({'a': 3, 'salt': None})}")
+    check("object form carries the date",
+          entries({"milk": {"count": 2, "expires_on": "2026-08-01"}})
+          == {"milk": {"count": 2, "expires_on": "2026-08-01"}},
+          f"got {entries({'milk': {'count': 2, 'expires_on': '2026-08-01'}})}")
+
+    # "leave the date alone" and "clear the date" must be distinguishable.
+    check("an omitted expires_on leaves the key out",
+          "expires_on" not in entries({"milk": 2})["milk"])
+    check("an explicit null keeps the key",
+          entries({"milk": {"count": 2, "expires_on": None}})["milk"]["expires_on"]
+          is None)
+
+    for label, bad in (
+        ("malformed date", {"milk": {"count": 1, "expires_on": "08/2026"}}),
+        ("non-string date", {"milk": {"count": 1, "expires_on": 20260801}}),
+        ("unknown field", {"milk": {"count": 1, "best_before": "2026-08-01"}}),
+        ("bad count", {"milk": {"count": "two"}}),
+        ("boolean count", {"milk": True}),
+        ("negative count", {"milk": -1}),
+        ("colliding keys", {"Milk": 1, "milk": 2}),
+    ):
+        try:
+            entries(bad)
+            check(f"{label} rejected", False, "no exception")
+        except ValueError:
+            check(f"{label} rejected", True)
+
+
 def test_alias_repository():
     print("\n-- JsonAliasRepository --")
     import tempfile
@@ -1287,6 +1454,11 @@ def main():
 
     test_fridge_repository_counts()
     test_fridge_repository_non_finite_counts()
+
+    test_expiry_status()
+    test_fridge_entries_grammar()
+    test_fridge_mutations_preserve_expiry()
+    test_normalize_ingredient_entries()
 
     test_alias_repository()
 

@@ -3,7 +3,7 @@
 from ..repositories import fridge_repo
 from ._common import (
     MAX_FRIDGE_UPDATE,
-    normalize_ingredient_counts,
+    normalize_ingredient_entries,
     normalize_ingredient_names,
     require_arg,
     tool_handler,
@@ -33,7 +33,11 @@ SCHEMA = {
             "description": (
                 "Either a list of names (each counts as one portion) or an "
                 "object mapping name -> portion count. Use null as the count to "
-                "mark a pantry staple that never runs out (salt, oil, spices)."
+                "mark a pantry staple that never runs out (salt, oil, spices). "
+                "To record an expiry date, map the name to an object instead: "
+                '{\"milk\": {\"count\": 2, \"expires_on\": \"2026-08-01\"}}. '
+                "Omitting expires_on leaves any stored date alone; passing null "
+                "clears it."
             ),
             "oneOf": [
                 {"type": "array", "items": {"type": "string"}},
@@ -84,32 +88,43 @@ def HANDLER(args: dict, **kwargs):
         # meaningless here and must not be validated against MAX_PORTION_COUNT.
         return _remove(normalize_ingredient_names(raw_items))
 
-    counts = normalize_ingredient_counts(raw_items)
-    if len(counts) > MAX_FRIDGE_UPDATE:
+    specs = normalize_ingredient_entries(raw_items)
+    if len(specs) > MAX_FRIDGE_UPDATE:
         raise ValueError(f"Too many ingredients (max {MAX_FRIDGE_UPDATE})")
-    if not counts:
+    if not specs:
         return "No changes — no valid ingredients provided."
 
     with fridge_repo.lock:
-        fridge = fridge_repo.load()
+        entries = fridge_repo.load_entries()
 
         changes = []
         unchanged = []
-        for ing, count in counts.items():
-            before = fridge.get(ing, 0)
+        for ing, spec in specs.items():
+            count = spec["count"]
+            existing = entries.get(ing)
+            before = existing["count"] if existing is not None else 0
             if action == "set":
-                fridge[ing] = count
+                new_count = count
             elif count is None:
-                fridge[ing] = None          # promote to pantry staple
-            elif fridge.get(ing, 0) is None:
+                new_count = None            # promote to pantry staple
+            elif before is None:
                 unchanged.append(ing)       # already unlimited; nothing to add
                 continue
             else:
-                fridge[ing] = before + count
-            changes.append((ing, before, fridge[ing]))
+                new_count = before + count
+
+            # An omitted expires_on leaves whatever is stored alone, so a
+            # routine restock does not quietly erase a date the user gave us.
+            if "expires_on" in spec:
+                expires_on = spec["expires_on"]
+            else:
+                expires_on = existing["expires_on"] if existing is not None else None
+
+            entries[ing] = {"count": new_count, "expires_on": expires_on}
+            changes.append((ing, before, new_count))
 
         if changes:
-            fridge_repo.save(fridge)
+            fridge_repo.save_entries(entries)
 
     if not changes:
         return f"No changes — {', '.join(sorted(unchanged))} already a pantry staple."

@@ -229,40 +229,84 @@ def normalize_ingredient_names(ingredients) -> list[str]:
     return list(dict.fromkeys(normalize_ingredient_name(name) for name in raw_names))
 
 
-def normalize_ingredient_counts(ingredients) -> dict:
-    """Accept ``["a", "b"]`` or ``{"a": 3, "salt": None}`` -> ``{name: count}``.
+def _normalize_expiry(raw, *, name: str) -> str:
+    """Validate an ISO expiry date supplied by the caller.
 
-    A bare list means one portion each. ``None`` marks a pantry staple. Mirrors
-    ``normalize_ingredients`` so both argument styles behave identically across
-    the tool surface.
+    Strict, unlike ``JsonFridgeRepository`` on load: a value arriving through a
+    tool call can still be corrected, whereas one already on disk would only be
+    lost. The codebase applies that asymmetry elsewhere too.
+    """
+    if not isinstance(raw, str):
+        raise ValueError(f"expires_on for '{name}' must be an ISO date (YYYY-MM-DD)")
+    try:
+        return date.fromisoformat(raw).isoformat()
+    except ValueError as exc:
+        raise ValueError(f"invalid expires_on {raw!r} for '{name}': {exc}") from exc
+
+
+def normalize_ingredient_entries(ingredients) -> dict:
+    """Accept the fridge's full input grammar -> ``{name: spec}``.
+
+    Handles ``["a", "b"]`` (one portion each), ``{"a": 3, "salt": None}``
+    (counts, ``None`` = pantry staple), and the object form
+    ``{"milk": {"count": 2, "expires_on": "2026-08-01"}}``.
+
+    Each returned spec always has ``"count"``. It has ``"expires_on"`` only
+    when the caller actually supplied one, so a handler can tell "clear the
+    date" (explicit ``null``) apart from "leave the date alone" (key absent).
     """
     ingredients = maybe_parse_json_arg(ingredients)
     if isinstance(ingredients, str):
         raise ValueError(f"Cannot parse ingredients string: {ingredients!r}")
     if isinstance(ingredients, list):
-        return {normalize_ingredient_name(ing): 1 for ing in ingredients}
+        return {
+            normalize_ingredient_name(ing): {"count": 1} for ing in ingredients
+        }
     if not isinstance(ingredients, dict):
         raise ValueError(
             f"ingredients must be a dict or list, got {type(ingredients).__name__}"
         )
+
     result: dict = {}
-    for raw_name, raw_count in ingredients.items():
+    for raw_name, raw_value in ingredients.items():
         name = normalize_ingredient_name(raw_name)
-        # Colliding keys can carry different counts, so one silently winning
-        # would discard a number the caller supplied deliberately.
+        # Colliding keys can carry different counts or dates, so one silently
+        # winning would discard something the caller supplied deliberately.
         if name in result:
             raise ValueError(f"duplicate ingredient '{name}' after normalization")
-        if raw_count is None:
-            result[name] = None
-            continue
-        if isinstance(raw_count, bool) or not isinstance(raw_count, int):
-            raise ValueError(f"count for '{raw_name}' must be an integer or null")
-        if not 0 <= raw_count <= MAX_PORTION_COUNT:
-            raise ValueError(
-                f"count for '{raw_name}' must be between 0 and {MAX_PORTION_COUNT}"
-            )
-        result[name] = raw_count
+
+        if isinstance(raw_value, dict):
+            unknown = set(raw_value) - {"count", "expires_on"}
+            if unknown:
+                raise ValueError(
+                    f"unknown fields for '{raw_name}': {sorted(unknown)}"
+                )
+            # A bare list entry means one portion; an object that omits the
+            # count means the same thing.
+            spec = {"count": _validate_count(raw_value.get("count", 1), raw_name)}
+            if "expires_on" in raw_value:
+                raw_expiry = raw_value["expires_on"]
+                spec["expires_on"] = (
+                    None if raw_expiry is None
+                    else _normalize_expiry(raw_expiry, name=raw_name)
+                )
+        else:
+            spec = {"count": _validate_count(raw_value, raw_name)}
+
+        result[name] = spec
     return result
+
+
+def _validate_count(raw_count, raw_name):
+    if raw_count is None:
+        return None
+    if isinstance(raw_count, bool) or not isinstance(raw_count, int):
+        raise ValueError(f"count for '{raw_name}' must be an integer or null")
+    if not 0 <= raw_count <= MAX_PORTION_COUNT:
+        raise ValueError(
+            f"count for '{raw_name}' must be between 0 and {MAX_PORTION_COUNT}"
+        )
+    return raw_count
 
 
 def days_since_last_cook() -> dict[str, int]:

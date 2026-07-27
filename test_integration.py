@@ -179,7 +179,11 @@ def test_list_fridge():
     print("\n-- list_fridge --")
     result = parse(list_fridge({}))
     check("returns the in_stock/out_of_stock shape",
-          set(result) == {"in_stock", "out_of_stock"}, f"got {result}")
+          set(result) == {"in_stock", "out_of_stock", "expiry", "expiring_soon",
+                          "expired"}, f"got {result}")
+    check("no expiry recorded for the seeded legacy file",
+          result["expiry"] == {} and result["expiring_soon"] == []
+          and result["expired"] == [], f"got {result}")
     in_stock = result["in_stock"]
     check("contains seeded items", "arroz" in in_stock and "patatas" in in_stock)
     check("has exactly 2 items", len(in_stock) == 2, f"got {in_stock}")
@@ -432,17 +436,17 @@ def test_register_cooked_meal_rollback():
     print("\n-- register_cooked_meal (rollback) --")
     before = _repos_mod.history_repo.load()
 
-    original_save = _repos_mod.fridge_repo.save
+    original_save = _repos_mod.fridge_repo.save_entries
     try:
-        def fail_save(_fridge):
+        def fail_save(_entries):
             raise RuntimeError("boom")
 
-        _repos_mod.fridge_repo.save = fail_save
+        _repos_mod.fridge_repo.save_entries = fail_save
         result = parse(register_cooked_meal({"dish_name": "tortilla de patatas"}))
         check("returns error on fridge failure", isinstance(result, dict) and "error" in result)
         check("history restored after failure", _repos_mod.history_repo.load() == before)
     finally:
-        _repos_mod.fridge_repo.save = original_save
+        _repos_mod.fridge_repo.save_entries = original_save
 
 
 def test_delete_history_entry():
@@ -1007,6 +1011,81 @@ def test_list_cooking_history_surfaces_corruption():
         (_TMP_DATA_DIR / "history.json").write_text(original, encoding="utf-8")
 
 
+def test_fridge_expiry_end_to_end():
+    print("\n-- update_fridge_inventory / list_fridge (expiry) --")
+    from datetime import date as _date, timedelta as _timedelta
+    soon = (_date.today() + _timedelta(days=2)).isoformat()
+    stale = (_date.today() - _timedelta(days=2)).isoformat()
+    later = (_date.today() + _timedelta(days=60)).isoformat()
+
+    update_fridge_inventory({"action": "set", "ingredients": {
+        "exp_soon": {"count": 2, "expires_on": soon},
+        "exp_old": {"count": 1, "expires_on": stale},
+        "exp_fresh": {"count": 1, "expires_on": later},
+        "exp_none": 4,
+    }})
+
+    fridge = parse(list_fridge({}))
+    check("expiry dates are reported",
+          fridge["expiry"]["exp_soon"]["expires_on"] == soon, f"got {fridge}")
+    check("expiring_soon is collected",
+          fridge["expiring_soon"] == ["exp_soon"], f"got {fridge}")
+    check("expired is collected", fridge["expired"] == ["exp_old"], f"got {fridge}")
+    check("a far-off date is fresh",
+          fridge["expiry"]["exp_fresh"]["status"] == "fresh", f"got {fridge}")
+    check("an entry with no date is absent from expiry",
+          "exp_none" not in fridge["expiry"], f"got {fridge}")
+
+    # The date is the user's estimate, not ground truth. Flag it, never
+    # silently delete their food.
+    check("expired items are still in stock",
+          fridge["in_stock"].get("exp_old") == 1, f"got {fridge}")
+    check("expired items are still usable",
+          "exp_old" in _repos_mod.fridge_repo.load_set(),
+          f"got {_repos_mod.fridge_repo.load_set()}")
+
+    # A plain restock must not quietly erase a date the user gave us.
+    update_fridge_inventory({"action": "add", "ingredients": {"exp_soon": 1}})
+    after = parse(list_fridge({}))
+    check("restocking preserves the recorded date",
+          after["expiry"]["exp_soon"]["expires_on"] == soon, f"got {after}")
+    check("restocking still increments the count",
+          after["in_stock"]["exp_soon"] == 3, f"got {after}")
+
+    update_fridge_inventory({"action": "set", "ingredients": {
+        "exp_soon": {"count": 3, "expires_on": None},
+    }})
+    cleared = parse(list_fridge({}))
+    check("an explicit null clears the date",
+          "exp_soon" not in cleared["expiry"], f"got {cleared}")
+
+    # Entries with no expiry must stay bare scalars on disk.
+    raw = json.loads((_TMP_DATA_DIR / "fridge.json").read_text(encoding="utf-8"))
+    check("no-expiry entries stay bare scalars on disk",
+          raw["exp_none"] == 4, f"got {raw['exp_none']}")
+    check("expiry entries are stored as objects",
+          raw["exp_old"] == {"count": 1, "expires_on": stale}, f"got {raw['exp_old']}")
+
+
+def test_fridge_expiry_validation():
+    print("\n-- update_fridge_inventory (expiry validation) --")
+    res = parse(update_fridge_inventory({"action": "set", "ingredients": {
+        "bad_exp": {"count": 1, "expires_on": "08/2026"},
+    }}))
+    check("malformed expires_on returns an error envelope",
+          "error" in res and "expires_on" in res["error"], f"got {res}")
+
+    res2 = parse(update_fridge_inventory({"action": "set", "ingredients": {
+        "bad_exp": {"count": 1, "best_before": "2026-08-01"},
+    }}))
+    check("unknown field inside the object rejected",
+          "error" in res2 and "best_before" in res2["error"], f"got {res2}")
+
+    check("nothing was written for the rejected input",
+          "bad_exp" not in _repos_mod.fridge_repo.load(),
+          f"got {_repos_mod.fridge_repo.load()}")
+
+
 def _clear_aliases():
     """Drop the alias map so a test starts from an un-aliased boundary."""
     path = _TMP_DATA_DIR / "aliases.json"
@@ -1561,6 +1640,10 @@ def main():
         # Online weight tuning (self-contained; runs late so it cannot perturb
         # the fridge/catalog state the earlier assertions depend on).
         test_online_weight_tuning()
+
+        # Ingredient expiry. Self-contained: uses its own exp_* keys.
+        test_fridge_expiry_end_to_end()
+        test_fridge_expiry_validation()
 
         # Ingredient aliases. These register a persistent alias map that the
         # tool boundary consults on every later call, so they run late and
