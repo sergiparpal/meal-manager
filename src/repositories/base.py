@@ -72,6 +72,23 @@ class HistoryRepository(Protocol):
     def delete_event(self, event_id: str) -> bool: ...
 
 
+class AliasRepository(Protocol):
+    """Persistence boundary for ingredient aliases.
+
+    A flat ``{alias: canonical}`` map consulted at the tool boundary so that
+    input spelled a second way canonicalizes itself. ``add`` maintains the
+    invariant that no alias points at another alias, which is what lets
+    ``resolve`` be a single hop rather than a walk.
+    """
+
+    lock: threading.Lock
+
+    def load(self) -> dict[str, str]: ...
+    def save(self, mapping: dict) -> None: ...
+    def resolve(self, name: str) -> str: ...
+    def add(self, alias: str, canonical: str) -> None: ...
+
+
 class TuningRepository(Protocol):
     """Persistence boundary for the online suggestion-weight learner.
 

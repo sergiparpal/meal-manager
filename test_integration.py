@@ -30,6 +30,7 @@ _pkg = importlib.import_module(_PLUGIN_DIR.name)
 _repos_mod = importlib.import_module(".src.repositories", _PLUGIN_DIR.name)
 _dii_mod = importlib.import_module(".src.dii", _PLUGIN_DIR.name)
 _tuning_mod = importlib.import_module(".src.tuning", _PLUGIN_DIR.name)
+_handlers_common = importlib.import_module(".src.handlers._common", _PLUGIN_DIR.name)
 
 # ---------------------------------------------------------------------------
 # Tmp data directory lifecycle
@@ -166,6 +167,8 @@ get_tuning_state = _load_handler("get_tuning_state")
 set_dish_instructions = _load_handler("set_dish_instructions")
 get_dish_recipe = _load_handler("get_dish_recipe")
 list_cooking_history = _load_handler("list_cooking_history")
+merge_ingredient_alias = _load_handler("merge_ingredient_alias")
+list_ingredient_aliases = _load_handler("list_ingredient_aliases")
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -1004,6 +1007,146 @@ def test_list_cooking_history_surfaces_corruption():
         (_TMP_DATA_DIR / "history.json").write_text(original, encoding="utf-8")
 
 
+def _clear_aliases():
+    """Drop the alias map so a test starts from an un-aliased boundary."""
+    path = _TMP_DATA_DIR / "aliases.json"
+    if path.exists():
+        path.unlink()
+
+
+def test_merge_ingredient_alias_catalog_only():
+    print("\n-- merge_ingredient_alias (catalog only) --")
+    _clear_aliases()
+    add_dish({"name": "Alias Cat", "ingredients": {"al_tomates": True, "al_sal": False}})
+
+    res = parse(merge_ingredient_alias({"from_name": "al_tomates", "to_name": "al_tomate"}))
+    check("reports the dish it rewrote",
+          res.get("dishes_updated") == ["alias cat"], f"got {res}")
+    check("fridge untouched", res.get("fridge_merged") is False, f"got {res}")
+
+    recipe = parse(get_dish_recipe({"dish_name": "Alias Cat"}))
+    check("recipe now uses the canonical name",
+          recipe["essential"] == ["al_tomate"], f"got {recipe}")
+
+    listed = parse(list_ingredient_aliases({}))
+    check("alias is recorded",
+          listed["aliases"].get("al_tomates") == "al_tomate", f"got {listed}")
+
+
+def test_merge_ingredient_alias_fridge_counts():
+    print("\n-- merge_ingredient_alias (fridge counts) --")
+    _clear_aliases()
+    update_fridge_inventory({"action": "set", "ingredients": {"al_f1": 2, "al_f2": 3}})
+    res = parse(merge_ingredient_alias({"from_name": "al_f1", "to_name": "al_f2"}))
+    check("counts are summed", res.get("resulting_count") == 5, f"got {res}")
+    check("fridge merge reported", res.get("fridge_merged") is True, f"got {res}")
+    fridge = _repos_mod.fridge_repo.load()
+    check("the retired key is gone", "al_f1" not in fridge, f"got {fridge}")
+
+    # A staple never runs out, so it wins over any finite count.
+    _clear_aliases()
+    update_fridge_inventory({"action": "set", "ingredients": {"al_s1": 3, "al_s2": None}})
+    res2 = parse(merge_ingredient_alias({"from_name": "al_s1", "to_name": "al_s2"}))
+    check("staple wins over a count", res2.get("resulting_count") is None, f"got {res2}")
+    check("stored as a staple",
+          _repos_mod.fridge_repo.load().get("al_s2") is None,
+          f"got {_repos_mod.fridge_repo.load()}")
+
+    # And the sum cannot exceed the portion cap.
+    _clear_aliases()
+    update_fridge_inventory({"action": "set", "ingredients": {"al_c1": 60, "al_c2": 60}})
+    res3 = parse(merge_ingredient_alias({"from_name": "al_c1", "to_name": "al_c2"}))
+    check("summed count is clamped at MAX_PORTION_COUNT",
+          res3.get("resulting_count") == _handlers_common.MAX_PORTION_COUNT,
+          f"got {res3}")
+
+    # Renaming a key the canonical does not yet have carries the count over.
+    _clear_aliases()
+    update_fridge_inventory({"action": "set", "ingredients": {"al_r1": 4}})
+    res4 = parse(merge_ingredient_alias({"from_name": "al_r1", "to_name": "al_r2"}))
+    check("a plain rename keeps the count", res4.get("resulting_count") == 4, f"got {res4}")
+    check("canonical key now holds it",
+          _repos_mod.fridge_repo.load().get("al_r2") == 4,
+          f"got {_repos_mod.fridge_repo.load()}")
+
+
+def test_merge_ingredient_alias_essential_wins():
+    print("\n-- merge_ingredient_alias (essential wins) --")
+    _clear_aliases()
+    add_dish({"name": "Alias Ess", "ingredients": {"al_e_opt": False, "al_e_ess": True}})
+
+    merge_ingredient_alias({"from_name": "al_e_opt", "to_name": "al_e_ess"})
+    recipe = parse(get_dish_recipe({"dish_name": "Alias Ess"}))
+    # Demoting an essential to optional would let can_cook_with approve a dish
+    # the user cannot actually make.
+    check("merging an optional into an essential keeps it essential",
+          recipe["essential"] == ["al_e_ess"] and recipe["optional"] == [],
+          f"got {recipe}")
+
+    _clear_aliases()
+    add_dish({"name": "Alias Ess2", "ingredients": {"al_e2_ess": True, "al_e2_opt": False}})
+    merge_ingredient_alias({"from_name": "al_e2_ess", "to_name": "al_e2_opt"})
+    recipe2 = parse(get_dish_recipe({"dish_name": "Alias Ess2"}))
+    check("essential wins in the other direction too",
+          recipe2["essential"] == ["al_e2_opt"] and recipe2["optional"] == [],
+          f"got {recipe2}")
+
+
+def test_merge_ingredient_alias_boundary_resolution():
+    print("\n-- merge_ingredient_alias (boundary canonicalizes later input) --")
+    _clear_aliases()
+    update_fridge_inventory({"action": "set", "ingredients": {"al_b_canon": 1}})
+    merge_ingredient_alias({"from_name": "al_b_dup", "to_name": "al_b_canon"})
+
+    # The whole point of persisting the alias: input spelled the old way must
+    # land on the canonical key from now on.
+    update_fridge_inventory({"action": "set", "ingredients": {"al_b_dup": 7}})
+    fridge = _repos_mod.fridge_repo.load()
+    check("the old name writes through to the canonical key",
+          fridge.get("al_b_canon") == 7, f"got {fridge}")
+    check("no entry is created under the old name",
+          "al_b_dup" not in fridge, f"got {fridge}")
+
+
+def test_merge_ingredient_alias_unlocks_a_dish():
+    print("\n-- merge_ingredient_alias (unlocks a previously uncookable dish) --")
+    _clear_aliases()
+    add_dish({"name": "Alias Unlock", "ingredients": {"al_u_tomates": True}})
+    update_fridge_inventory({"action": "set", "ingredients": {"al_u_tomate": 5}})
+
+    before = parse(get_meal_suggestions({}))
+    check("dish is not cookable while the spellings are split",
+          not any(s["dish"] == "alias unlock" for s in before), f"got {before}")
+
+    merge_ingredient_alias({"from_name": "al_u_tomates", "to_name": "al_u_tomate"})
+
+    after = parse(get_meal_suggestions({}))
+    check("merging makes the dish cookable",
+          any(s["dish"] == "alias unlock" for s in after), f"got {after}")
+
+
+def test_merge_ingredient_alias_errors():
+    print("\n-- merge_ingredient_alias (errors) --")
+    _clear_aliases()
+    res = parse(merge_ingredient_alias({"from_name": "al_same", "to_name": "al_same"}))
+    check("merging a name onto itself errors",
+          "error" in res and "already the canonical" in res["error"], f"got {res}")
+
+    merge_ingredient_alias({"from_name": "al_x", "to_name": "al_y"})
+    # `from_name` resolves through the alias map too, so a repeat merge lands on
+    # the canonical name and is correctly reported as a no-op.
+    res2 = parse(merge_ingredient_alias({"from_name": "al_x", "to_name": "al_y"}))
+    check("re-merging an already-merged pair errors", "error" in res2, f"got {res2}")
+
+    res3 = parse(merge_ingredient_alias({"from_name": "al_z"}))
+    check("missing to_name reported clearly",
+          "error" in res3 and "to_name" in res3["error"], f"got {res3}")
+
+    res4 = parse(merge_ingredient_alias({"from_name": "   ", "to_name": "al_q"}))
+    check("blank name rejected", "error" in res4, f"got {res4}")
+    _clear_aliases()
+
+
 def test_dish_instructions_roundtrip():
     print("\n-- set_dish_instructions / get_dish_recipe --")
     add_dish({
@@ -1418,6 +1561,16 @@ def main():
         # Online weight tuning (self-contained; runs late so it cannot perturb
         # the fridge/catalog state the earlier assertions depend on).
         test_online_weight_tuning()
+
+        # Ingredient aliases. These register a persistent alias map that the
+        # tool boundary consults on every later call, so they run late and
+        # clear the map when they are done.
+        test_merge_ingredient_alias_catalog_only()
+        test_merge_ingredient_alias_fridge_counts()
+        test_merge_ingredient_alias_essential_wins()
+        test_merge_ingredient_alias_boundary_resolution()
+        test_merge_ingredient_alias_unlocks_a_dish()
+        test_merge_ingredient_alias_errors()
 
         # These overwrite dishes.json wholesale — keep them last.
         test_dii_session_id_traversal_rejected()

@@ -522,6 +522,52 @@ def test_fridge_repository_non_finite_counts():
         _shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_alias_repository():
+    print("\n-- JsonAliasRepository --")
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_alias_"))
+    try:
+        path = tmp / "aliases.json"
+        repo = _repos_mod.JsonAliasRepository(path)
+
+        check("missing file loads as empty", repo.load() == {})
+        check("resolve returns the input unchanged when unmapped",
+              repo.resolve("tomate") == "tomate")
+        check("nothing is created just by reading", not path.exists())
+
+        repo.add("tomates", "tomate")
+        check("alias resolves to its canonical", repo.resolve("tomates") == "tomate")
+        check("canonical resolves to itself", repo.resolve("tomate") == "tomate")
+
+        # A later merge that retires the previous canonical must re-point the
+        # old alias too, or the single-hop resolve would stop one link short.
+        repo.add("tomate", "tomate pera")
+        check("pre-existing alias is re-pointed, no chain forms",
+              repo.resolve("tomates") == "tomate pera", f"got {repo.load()}")
+        check("the retired name resolves to the new canonical",
+              repo.resolve("tomate") == "tomate pera", f"got {repo.load()}")
+        check("no alias points at another alias",
+              not (set(repo.load().values()) & set(repo.load())), f"got {repo.load()}")
+
+        try:
+            repo.add("sal", "sal")
+            check("self-alias rejected", False, "no exception")
+        except ValueError:
+            check("self-alias rejected", True)
+
+        path.write_text("{not json", encoding="utf-8")
+        check("corrupt file loads as empty", repo.load() == {})
+        path.write_text('["a", "b"]', encoding="utf-8")
+        check("non-object file loads as empty", repo.load() == {})
+        path.write_text('{"a": 1, "": "x", "b": "", "ok": "canon"}', encoding="utf-8")
+        check("non-string and blank entries are skipped",
+              repo.load() == {"ok": "canon"}, f"got {repo.load()}")
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _history_repo_in_tmp(tmp):
     return _repos_mod.JsonHistoryRepository(tmp / "history.json")
 
@@ -1241,6 +1287,8 @@ def main():
 
     test_fridge_repository_counts()
     test_fridge_repository_non_finite_counts()
+
+    test_alias_repository()
 
     test_cooking_event_from_dict_strict()
     test_history_projects_latest_per_dish()

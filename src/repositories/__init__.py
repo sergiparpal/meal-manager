@@ -21,11 +21,13 @@ module that already imported ``dish_repo`` / ``fridge_repo`` / ``history_repo``
 from pathlib import Path
 
 from .base import (
+    AliasRepository,
     DishRepository,
     FridgeRepository,
     HistoryRepository,
     TuningRepository,
 )
+from .json_alias import JsonAliasRepository
 from .json_dish import JsonDishRepository
 from .json_fridge import JsonFridgeRepository
 from .json_history import HistoryDataError, JsonHistoryRepository
@@ -44,6 +46,7 @@ dish_repo: DishRepository = JsonDishRepository(_DEFAULT_DATA_DIR / "dishes.json"
 fridge_repo: FridgeRepository = JsonFridgeRepository(_DEFAULT_DATA_DIR / "fridge.json")
 history_repo: HistoryRepository = JsonHistoryRepository(_DEFAULT_DATA_DIR / "history.json")
 tuning_repo: TuningRepository = JsonTuningRepository(_DEFAULT_DATA_DIR / "tuning.json")
+alias_repo: AliasRepository = JsonAliasRepository(_DEFAULT_DATA_DIR / "aliases.json")
 
 
 def configure(data_dir) -> None:
@@ -63,18 +66,22 @@ def configure(data_dir) -> None:
     fridge_repo.path = data_dir / "fridge.json"
     history_repo.path = data_dir / "history.json"
     tuning_repo.path = data_dir / "tuning.json"
+    alias_repo.path = data_dir / "aliases.json"
 
 
 __all__ = [
+    "AliasRepository",
     "DishRepository",
     "FridgeRepository",
     "HistoryDataError",
     "HistoryRepository",
     "TuningRepository",
+    "JsonAliasRepository",
     "JsonDishRepository",
     "JsonFridgeRepository",
     "JsonHistoryRepository",
     "JsonTuningRepository",
+    "alias_repo",
     "configure",
     "dish_repo",
     "fridge_repo",

@@ -10,7 +10,7 @@ import logging
 from datetime import date
 
 from ..dish import Dish
-from ..repositories import history_repo
+from ..repositories import alias_repo, history_repo
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +158,17 @@ def normalize_dish_name(name: str) -> str:
 
 
 def normalize_ingredient_name(name: str) -> str:
-    return _normalize_label(name, label="Ingredient name")
+    """Normalize an ingredient name and collapse it onto its canonical spelling.
+
+    Alias resolution lives here, at the tool boundary, and deliberately *not*
+    in ``Dish.normalize_ingredient``: the domain layer stays pure and I/O-free.
+    That asymmetry is intentional — do not "fix" it by pushing the lookup down.
+
+    Because this reads the alias map, handlers must normalize their arguments
+    **before** acquiring any repository lock. The lock order is
+    ``alias -> dish -> fridge``.
+    """
+    return alias_repo.resolve(_normalize_label(name, label="Ingredient name"))
 
 
 def normalize_ingredients(ingredients) -> dict:
