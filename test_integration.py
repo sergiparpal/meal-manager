@@ -1,4 +1,4 @@
-"""Integration smoke test for all 21 meal_manager tools.
+"""Integration smoke test for all 26 meal_manager tools.
 
 The test creates a throw-away data directory under ``tempfile.gettempdir()``
 and points the repositories + DII session store at it via the package-level

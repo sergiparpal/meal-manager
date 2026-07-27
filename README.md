@@ -2,7 +2,7 @@
 
 An intelligent meal planning and fridge inventory management system structured as an official Hermes plugin. It helps users decide what to cook for dinner and what to buy at the grocery store by analyzing their current fridge contents, recipe catalog, and cooking history.
 
-An AI assistant invokes the twenty-one tool handlers registered via `__init__.py:register(ctx)` to deliver personalized dinner suggestions, generate optimized shopping lists, manage fridge inventory, manage the recipe catalog, track cooked meals, and interactively build ingredient lists via the Dynamic Ingredient Interface (DII) — all with zero external dependencies.
+An AI assistant invokes the twenty-six tool handlers registered via `__init__.py:register(ctx)` to deliver personalized dinner suggestions, generate optimized shopping lists, manage fridge inventory, manage the recipe catalog, track cooked meals, and interactively build ingredient lists via the Dynamic Ingredient Interface (DII) — all with zero external dependencies.
 
 ---
 
@@ -31,9 +31,12 @@ The result is a system that offers the user the freedom of conversation while gu
 - **Unlock-Ranked Shopping List** — Identifies ingredients that, once purchased, unlock entirely new dishes, ranked by the size of the smallest basket that actually gets you to a meal, then by how many dishes each ingredient reaches, then by projected score. Defaults to single-ingredient unlocks; raise `max_missing` to 2-3 when the fridge is nearly empty and no one-item unlock exists.
 - **What a Dish Still Needs** — `get_missing_for_dish` answers "can I make this tonight?" for a named dish, splitting what is missing into blocking essentials and score-only optionals.
 - **Fridge Inventory Management** — Add, remove, or set ingredients as you shop or cook, tracked as approximate portion counts rather than an all-or-nothing list. Pantry staples (salt, oil, spices) are marked unlimited and never run out. Ingredient and dish names are normalized to lowercase for consistent matching.
-- **Cooking History Tracking** — Logs cooked meals with ISO dates, including backdated ones. Because history keeps a single date per dish, backdating never overwrites a more recent cook — recording a forgotten meal from last month cannot rewind the cooldown on something you made this morning. History keys are normalized to lowercase on load, so comparisons are case-insensitive.
+- **Cooking History Tracking** — Logs cooked meals with ISO dates, including backdated ones, as an append-only event log. The one-date-per-dish view the suggestion engine uses is computed from that log, so backdating cannot rewind the cooldown on something you made this morning — recording a forgotten meal from last month simply adds an older event that the projection ignores. `list_cooking_history` answers "when did I last cook this?" and "how often do I make it?", and taking an entry back retracts it rather than destroying it, so the record of what you actually cooked stays intact. History keys are normalized to lowercase on load, so comparisons are case-insensitive.
 - **Portion Accounting on Cook** — When a meal is registered as cooked, one portion of each essential ingredient is consumed from the fridge. An ingredient you had plenty of stays available; one that runs out is remembered as out of stock rather than silently deleted.
 - **Essential vs. Optional Ingredients** — Recipes distinguish between must-have ingredients (required to cook) and nice-to-have ingredients (boost the suggestion score but are not blocking).
+- **Cooking Instructions** — Recipes can carry free-form cooking steps alongside their ingredients. `set_dish_instructions` records or clears them, `get_dish_recipe` reads the whole recipe back, and editing a dish's ingredients leaves the steps untouched.
+- **Ingredient Aliases** — "tomato", "tomatoes" and "roma tomato" stop being three different things. `merge_ingredient_alias` rewrites the catalog and fridge once to use a single canonical name, then remembers the alias so anything you type later canonicalizes itself. Where a recipe listed both spellings, essential wins over optional; where the fridge held both, the counts add up.
+- **Expiry Awareness** — Fridge entries can carry a `expires_on` date. `list_fridge` reports what is expiring within three days and what has already passed. Expired items are flagged, never removed — the date is your estimate, not ground truth, and deleting your food is not a call the tool gets to make.
 - **Dynamic Ingredient Interface (DII)** — Interactive, stateful ingredient selection via plain text conversation. A "probability funnel" reveals ranked ingredient suggestions one at a time. The agent interprets free-text user responses (e.g. "yes", "skip", "add X") to drive add/skip/remove/manual-add controls. Removing an essential ingredient triggers a recalculation signal so the agent can re-evaluate suggestions.
 
 ---
@@ -135,7 +138,7 @@ Reply naturally — *"yes"*, *"skip"*, *"remove X"*, *"also add Y"*, or *"done"*
 
 ### As a Hermes Plugin
 
-The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `__init__.py`. It registers twenty-one tools:
+The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `__init__.py`. It registers twenty-six tools:
 
 | Tool | Purpose |
 |---|---|
@@ -145,12 +148,17 @@ The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `_
 | `get_tuning_state` | Reports the current self-adjusted availability/recency blend and learning status |
 | `update_fridge_inventory` | Adds, removes, or sets fridge ingredients and their portion counts |
 | `register_cooked_meal` | Logs a dish as cooked (today or a given date) and consumes one portion of each essential |
-| `delete_history_entry` | Undo for `register_cooked_meal` — removes a dish from history |
-| `list_fridge` | Returns the current fridge contents with portion counts |
+| `delete_history_entry` | Undo for `register_cooked_meal` — retracts the most recent cook of a dish |
+| `list_cooking_history` | Lists recorded cook events, newest first — "when did I last cook X?" |
+| `list_fridge` | Returns the current fridge contents with portion counts, expiry dates, and what needs using up |
 | `add_dish` | Adds a new recipe to the catalog |
 | `add_dishes_batch` | Adds multiple recipes in a single call |
 | `delete_dish` | Removes a recipe from the catalog |
 | `edit_dish` | Replaces the ingredients of an existing dish |
+| `set_dish_instructions` | Sets or clears the cooking steps for a dish |
+| `get_dish_recipe` | Returns a dish's full recipe: essentials, optionals, and instructions |
+| `merge_ingredient_alias` | Merges two spellings of one ingredient across the catalog and fridge |
+| `list_ingredient_aliases` | Lists the alias mappings recorded so far |
 | `clear_fridge` | Empties the fridge completely |
 | `init_ingredient_session` | Start a DII session with ranked ingredient suggestions |
 | `dii_add_suggested` | Accept the current ingredient suggestion and reveal the next |
@@ -182,8 +190,13 @@ print(m.HANDLER({}))
 Swap `get_meal_suggestions` for any other module under `src/handlers/`, for example:
 
 - `update_fridge_inventory.HANDLER({'action': 'add', 'ingredients': ['chicken', 'rice']})`
+- `update_fridge_inventory.HANDLER({'action': 'set', 'ingredients': {'milk': {'count': 2, 'expires_on': '2026-08-01'}}})`
 - `get_quick_shopping_list.HANDLER({})`
 - `register_cooked_meal.HANDLER({'dish_name': 'rice with chicken'})`
+- `set_dish_instructions.HANDLER({'dish_name': 'rice with chicken', 'instructions': 'Brown the chicken, add rice, simmer 20 min.'})`
+- `get_dish_recipe.HANDLER({'dish_name': 'rice with chicken'})`
+- `list_cooking_history.HANDLER({'dish_name': 'rice with chicken'})`
+- `merge_ingredient_alias.HANDLER({'from_name': 'tomatoes', 'to_name': 'tomato'})`
 
 ### Running the Integration Test
 
@@ -191,9 +204,9 @@ Swap `get_meal_suggestions` for any other module under `src/handlers/`, for exam
 python3 test_integration.py
 ```
 
-This script creates a throw-away temp directory, points the repositories and DII session store at it via `configure()`, seeds its own fixtures, and exercises all twenty-one tools end-to-end. The real `data/` files are never touched — the temp directory is deleted on teardown.
+This script creates a throw-away temp directory, points the repositories and DII session store at it via `configure()`, seeds its own fixtures, and exercises all twenty-six tools end-to-end. The real `data/` files are never touched — the temp directory is deleted on teardown.
 
-For the fastest feedback on pure domain logic, run `python3 test_unit.py`. It covers the dataclass, scoring, shopping, weight-tuning, and ingredient-normalization helpers without touching `data/`.
+For the fastest feedback on pure domain logic, run `python3 test_unit.py`. It covers the dataclass, scoring, shopping, weight-tuning, cooking-event, alias, expiry, and ingredient-normalization helpers without touching `data/`.
 
 ### Continuous Integration
 
@@ -282,7 +295,8 @@ meal-manager/
         "rice": true,
         "chicken": true,
         "peppers": false
-      }
+      },
+      "instructions": "Brown the chicken, add the rice, simmer 20 minutes."
     }
   ]
 }
@@ -290,25 +304,54 @@ meal-manager/
 
 - `true` = essential ingredient (must be in the fridge to cook the dish). Essentials are a gate, not a score: a dish missing one is never suggested, so they contribute nothing to the ranking of the dishes that *are* offered.
 - `false` = optional ingredient. Each optional you actually have in the fridge raises the dish's score, up to `OPTIONAL_CAP` (3) of them; declaring an optional you lack costs nothing. Describing a recipe more thoroughly can therefore only help it, never hurt it.
+- `instructions` is optional free-form text, capped at 20,000 characters. The key is written only when instructions are actually set, so a catalog without them round-trips byte-identically. Clearing them (passing `null` or a blank string) removes the key rather than storing an empty string.
 - Legacy `prep_time` fields are ignored on load and are not written back.
 
 **`data/fridge.json`** — Fridge inventory, as ingredient name → portion count:
 
 ```json
-{"potatoes": 2, "eggs": 6, "olive oil": null, "rice": 0}
+{"potatoes": 2, "eggs": 6, "olive oil": null, "rice": 0,
+ "milk": {"count": 2, "expires_on": "2026-08-01"}}
 ```
 
 - `n > 0` = approximately `n` dishes' worth on hand. Cooking a dish consumes one portion of each of its essentials.
 - `null` = pantry staple: unlimited, never decremented (salt, oil, spices).
 - `0` = known to be out of stock. Kept deliberately — "ran out" is more informative than "never had it", and `list_fridge` reports these separately under `out_of_stock`.
+- An entry may instead be an object carrying an expiry date alongside the count. Entries with no expiry stay bare scalars, so adding this feature does not rewrite files that do not use it. An unreadable date costs the date, not the ingredient.
 
-> **Format change.** `fridge.json` was previously a flat array of names (`["potatoes", "eggs", "rice"]`). Existing files are migrated automatically the first time they are loaded — each name becomes one portion — and rewritten in the new shape on the next save. No manual migration step is required, and both shapes are accepted indefinitely.
+> **Format change.** `fridge.json` was previously a flat array of names (`["potatoes", "eggs", "rice"]`). Existing files are migrated automatically the first time they are loaded — each name becomes one portion — and rewritten in the new shape on the next save. No manual migration step is required, and every shape is accepted indefinitely.
 
-**`data/history.json`** — Cooking history:
+**`data/history.json`** — Cooking history, as an append-only event log:
 
 ```json
-{"rice with chicken": "2026-04-02"}
+{
+  "schema_version": 2,
+  "events": [
+    {
+      "id": "cook_9f2c1e...",
+      "dish_name": "rice with chicken",
+      "cooked_on": "2026-04-02",
+      "recorded_at": "2026-04-02T19:14:03+00:00",
+      "backfilled": false,
+      "retracted_at": null
+    }
+  ]
+}
 ```
+
+- The one-date-per-dish view the suggestion engine consumes is a *projection*: the latest `cooked_on` per dish, with retracted events excluded. Because it takes a maximum, an older event can never displace a newer one.
+- `backfilled` marks a cook recorded after the fact. Backdated cooks still consume from the fridge but skip the learning update, since the decision they replay never happened.
+- `retracted_at` marks an entry the user took back. The row survives and stays visible through `list_cooking_history`; it just stops counting. Only a rolled-back cook — one whose fridge consumption failed — is hard-deleted, because it never happened at all.
+
+> **Format change.** `history.json` was previously a flat `{"dish name": "2026-04-02"}` object. Existing files are migrated in memory on load (one event per entry, with ids derived deterministically so re-migrating never duplicates a row) and rewritten in the new shape on the next write.
+
+**`data/aliases.json`** — Ingredient aliases (created lazily on the first merge):
+
+```json
+{"tomatoes": "tomato", "roma tomato": "tomato"}
+```
+
+- A flat `alias → canonical` map, consulted at the tool boundary so input spelled the old way lands on the canonical name. No alias ever points at another alias, so resolution is a single hop.
 
 **`data/tuning.json`** — Online-learner state for the availability/recency blend (created lazily on the first learning event):
 

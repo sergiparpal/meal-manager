@@ -1,5 +1,5 @@
 name: meal_manager
-version: "0.1.0"
+version: "0.2.0"
 description: Meal planning and fridge inventory manager for Hermes agents.
 
 provides_tools:
@@ -10,11 +10,16 @@ provides_tools:
   - update_fridge_inventory
   - register_cooked_meal
   - delete_history_entry
+  - list_cooking_history
   - list_fridge
   - add_dish
   - add_dishes_batch
   - delete_dish
   - edit_dish
+  - set_dish_instructions
+  - get_dish_recipe
+  - merge_ingredient_alias
+  - list_ingredient_aliases
   - clear_fridge
   - init_ingredient_session
   - dii_add_suggested

@@ -18,7 +18,10 @@ standard library and persists state in JSON files under `data/`.
 - CI (`.github/workflows/tests.yml`) runs both test scripts on push to `main`, on pull requests, and on manual dispatch, across Python 3.12/3.13/3.14. It is the only automated gate — there is nothing else for it to run.
 - Tools are auto-discovered: each module under `src/handlers/` exports `NAME`, `SCHEMA`, `HANDLER` and is picked up by `iter_tools()`. There is no central registry to keep in sync.
 - Relative imports are required inside the package.
-- Preserve the existing JSON data formats and tool names. The one exception on record: `fridge.json` migrated from a flat array of names to a `{name: count}` object (`null` = pantry staple, `0` = out of stock). The loader accepts both shapes and rewrites legacy files on the next save, so no other format may be changed without the same courtesy.
+- Preserve the existing JSON data formats and tool names. Every format change on record follows the same courtesy — the loader accepts the old shape, migrates it in memory, and rewrites it on the next save, so no user ever runs a migration step:
+  - `fridge.json`: flat array of names → `{name: count}` object (`null` = pantry staple, `0` = out of stock) → values may also be `{"count": n, "expires_on": "YYYY-MM-DD"}`. Entries without an expiry are still written as bare scalars.
+  - `history.json`: `{dish: date}` → `{"schema_version": 2, "events": [...]}`, an append-only log. Legacy ids are derived with `uuid5` so re-migrating is idempotent.
+  - `dishes.json`: dishes may carry `instructions`; the key is emitted only when set, so untouched catalogs do not churn.
 
 ## Core Commands
 
@@ -109,7 +112,9 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 ## Error Handling
 
 - Validate user-supplied input at the tool boundary.
-- Raise `ValueError` (or `LookupError` for not-found cases) inside handlers — do not catch and reformat. The `@tool_handler(NAME)` decorator from `src/handlers/_common.py` is mandatory on every public handler; it logs the exception via `logger.exception` and converts it into the unified `{"error": str(exc)}` JSON envelope.
+- Raise `ValueError` (or `LookupError` for not-found cases) inside handlers — do not catch and reformat. The `@tool_handler(NAME, SCHEMA)` decorator from `src/handlers/_common.py` is mandatory on every public handler; it logs the exception via `logger.exception` and converts it into the unified `{"error": ...}` JSON envelope.
+- Always pass `SCHEMA` to the decorator. It derives the allowed argument keys from `SCHEMA["properties"]`, so an unknown key is rejected instead of silently ignored. If a handler needs to read a key, that key belongs in the schema — the schema is the tool's public interface and should be honest. `extra_args={...}` exists for keys that must stay undocumented; comment why.
+- The envelope message is sanitized by `_safe_error_message`. `ValueError` and `LookupError` pass through verbatim (handlers write them for the user); `OSError` and `json.JSONDecodeError` are replaced with fixed text because they carry filesystem paths and file contents; anything else becomes "An internal error occurred". `JSONDecodeError` subclasses `ValueError`, so it must be tested first. Full detail always still reaches the log.
 - Handlers return plain Python objects (dict, list, str). The decorator handles `json.dumps(..., ensure_ascii=False)` for both success and error paths.
 - Do not let stack traces escape a handler function — the decorator's outer `try/except` is the single guarantee of that.
 - Internal helpers and engine-layer code may raise freely; the decorator at the boundary is the catch-all.
@@ -126,8 +131,10 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 
 ## Concurrency
 
-- Each file-backed store singleton owns its own `threading.Lock` instance attribute (`self.lock` on the dish, fridge, and tuning repos; `self._lock` on the history repo).
+- Each file-backed store singleton owns its own `threading.Lock` instance attribute (`self.lock` on the dish, fridge, alias, and tuning repos; `self._lock` on the history repo).
 - Hold the appropriate lock around load-modify-save sequences.
+- **Lock order is `alias -> dish -> fridge`.** Acquire them in that order and never the reverse.
+- **Normalize arguments before acquiring any repository lock.** `_common.normalize_ingredient_name` reads the alias map, so normalizing inside a `dish_repo.lock` / `fridge_repo.lock` block inverts the documented order. Every handler normalizes first, then locks.
 - DII sessions also use per-session locks plus a global lock for session maps. Always take a session lock through the `IngredientSessionStore.session_lock(session_id)` context manager, which reference-counts holders and prunes the entry itself. Never delete from `_locks` anywhere else: removing a lock does not release it, so a holder mid-critical-section and the next caller end up on different mutexes.
 - Do not bypass the locking helpers when changing persistence behavior.
 - Read-only suggestion queries are intentionally lock-free because they rely on atomic file replacement.
@@ -144,7 +151,12 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 - Scoring never rewards essentials — they are a gate enforced by `can_cook_with`. The match term is the count of *optional* ingredients in stock, capped at `OPTIONAL_CAP`.
 - The fridge stores portion counts: `None` = pantry staple (unlimited), `0` = known out of stock, `n > 0` = roughly `n` dishes' worth.
 - `register_cooked_meal` consumes one portion of each essential ingredient after recording the meal; staples are untouched and counts floor at 0 rather than being deleted. It accepts an optional ISO `date` for backdated cooks, which skip the learning update.
-- History keeps one date per dish, so `register_cooked_meal` writes with `only_if_newer=True`: backdating a forgotten meal never erases a more recent cook (which would rewind the cooldown and re-suggest a dish made hours ago). Plain `set_entry` remains last-write-wins for the rollback path.
+- Cooking history is an append-only event log, projected to one date per dish on read. `history_repo.load()` returns the latest `cooked_on` per dish with retracted events excluded, so backdating a forgotten meal cannot rewind a more recent cook — that is a property of the model now, not a flag on the write.
+- Retraction and deletion are different operations. `delete_history_entry` retracts (the row survives, visible through `list_cooking_history`, and stops counting toward the projection); `register_cooked_meal`'s rollback path calls `delete_event` (hard delete, because a cook that failed halfway never happened); `delete_dish` retracts every event for the dish it removes.
+- Ingredient aliases canonicalize input at the tool boundary only. `_common.normalize_ingredient_name` resolves them; `Dish.normalize_ingredient` deliberately does not, so the domain layer stays pure and I/O-free. Do not "fix" that asymmetry.
+- On an alias merge, essential wins over optional in a recipe, and in the fridge a pantry staple wins over any count while two counts sum (clamped to `MAX_PORTION_COUNT`).
+- Fridge entries may carry `expires_on`. Expired items stay available and are only flagged — the date is the user's estimate, not ground truth. The tool boundary is strict about the date format; the loader is forgiving and drops an unreadable date rather than the ingredient.
+- `Dish.instructions` is optional free-form text capped at `MAX_INSTRUCTIONS_LENGTH`; blank normalizes to `None` so "cleared" and "never set" stay a single state.
 - Colliding normalized names in a dict argument are rejected, not silently merged — the values can disagree. List arguments still collapse repeats. `Dish.from_dict` stays permissive so existing catalog rows keep loading.
 - Quick shopping suggestions surface dishes missing at most `max_missing` essential ingredients (default 1), ranked by smallest basket (`still_missing`) first, then reach, then score. Reach-first alone promoted ingredients that unlock nothing on their own once `max_missing > 1`.
 - DII sessions reveal suggestions one at a time through the probability funnel.
@@ -163,7 +175,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 
 ## Testing
 
-- `test_unit.py` covers pure logic in `src/dish.py`, `src/suggestion.py`, `src/shopping.py`, `src/tuning.py`, and the `normalize_*` helpers in `src/handlers/_common.py`. It also covers the repository behavior that needs no tool boundary — fridge portion counts (including non-finite values) and `set_entry(only_if_newer=True)` — against a tmp path, not the real `data/`.
+- `test_unit.py` covers pure logic in `src/dish.py`, `src/suggestion.py`, `src/shopping.py`, `src/tuning.py`, `src/history_event.py`, and the `normalize_*` / argument-validation / error-sanitization helpers in `src/handlers/_common.py`. It also covers the repository behavior that needs no tool boundary — fridge portion counts (including non-finite values and the expiry grammar), the history event log (projection, migration idempotence, retract vs delete, corruption), and the alias map — against a tmp path, not the real `data/`.
 - `test_integration.py` is the end-to-end smoke test for all tool handlers.
 - The integration script creates a throw-away tmp directory, points the repositories and DII session store at it via `configure()`, seeds deterministic fixtures, and removes the directory when finished. The real `data/` files are never touched.
 - It intentionally exercises error cases and may print stack traces for expected failures.
