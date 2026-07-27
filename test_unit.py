@@ -1297,6 +1297,148 @@ def test_tuning_shift_after_warmup():
           abs(state["deployed_match_weight"] + state["deployed_time_weight"] - 1.0) < 1e-9)
 
 
+def test_dish_rejects_invalid_ingredient_values():
+    print("\n-- Dish: invalid ingredient names/flags rejected on construction --")
+    # add_ingredient has always checked both, but direct construction skipped
+    # them: a truthy non-bool then read as "essential" via can_cook_with, so
+    # {"": "yes"} became a nameless blocking ingredient nothing could satisfy.
+    try:
+        Dish(name="soup", ingredients={"   ": True})
+        check("empty ingredient name rejected", False, "should have raised")
+    except ValueError:
+        check("empty ingredient name rejected", True)
+
+    try:
+        Dish(name="soup", ingredients={"rice": "yes"})
+        check("non-boolean essential flag rejected", False, "should have raised")
+    except ValueError:
+        check("non-boolean essential flag rejected", True)
+
+    ok = Dish(name="soup", ingredients={"Rice": True, "Basil": False})
+    check("valid ingredients still accepted",
+          ok.ingredients == {"rice": True, "basil": False}, f"got {ok.ingredients}")
+
+    # from_dict routes through add_ingredient, which already rejected both, so
+    # the repository keeps treating such a row as malformed rather than losing
+    # the whole catalog.
+    try:
+        Dish.from_dict({"name": "soup", "ingredients": {"rice": "yes"}})
+        check("from_dict still rejects a non-boolean flag", False, "should have raised")
+    except ValueError:
+        check("from_dict still rejects a non-boolean flag", True)
+
+
+def test_alias_repository_cache_invalidation():
+    print("\n-- JsonAliasRepository: cached reads stay correct --")
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_alias_cache_"))
+    try:
+        path = tmp / "aliases.json"
+        repo = _repos_mod.JsonAliasRepository(path)
+
+        check("missing file resolves to the input", repo.resolve("tomate") == "tomate")
+        repo.add("tomates", "tomate")
+        check("a write is visible immediately", repo.resolve("tomates") == "tomate")
+
+        # Repeated reads are served from the cache; they must stay correct.
+        check("repeated reads stay correct",
+              all(repo.resolve("tomates") == "tomate" for _ in range(5)))
+
+        # load() hands back a copy: add() mutates what it receives, and the
+        # cached mapping is shared.
+        borrowed = repo.load()
+        borrowed["injected"] = "nonsense"
+        check("load() returns a copy, not the cache",
+              repo.resolve("injected") == "injected", f"got {repo.load()}")
+
+        # A write through the repository invalidates.
+        repo.add("tomate", "tomate pera")
+        check("a later write invalidates the cache",
+              repo.resolve("tomates") == "tomate pera", f"got {repo.load()}")
+
+        # An out-of-band edit is caught by the stat fingerprint.
+        path.write_text('{"berenjena": "aubergine"}', encoding="utf-8")
+        check("an external rewrite is picked up",
+              repo.resolve("berenjena") == "aubergine", f"got {repo.load()}")
+
+        path.unlink()
+        check("deletion is picked up", repo.resolve("berenjena") == "berenjena")
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_tuning_deployed_weight_off_grid():
+    print("\n-- tuning.select_deployed (deployed weight off the candidate grid) --")
+    # BAND's floor (0.35) is below the candidate grid (0.40+), and
+    # deployed_weights clamps into BAND, so the stored weight can be a value
+    # with no accumulated mass. _mean read that as 0.0, which let any candidate
+    # clear HYSTERESIS_MARGIN and bypass the gate entirely.
+    state = tuning.initialize_state()
+    state["observations"] = tuning.MIN_OBSERVATIONS + 5
+    for w in tuning.CANDIDATES:
+        key = tuning._key(w)
+        state["C"][key] = 1.0
+        state["S"][key] = 0.50
+    state["deployed_match_weight"] = 0.35          # in BAND, not a candidate
+    state["S"][tuning._key(0.40)] = 0.51           # nearest candidate to 0.35
+    state["S"][tuning._key(0.65)] = 0.52           # best overall, but only +0.01
+
+    result = tuning.select_deployed(state)
+    check("an off-grid weight snaps onto the grid",
+          result["deployed_match_weight"] in tuning.CANDIDATES,
+          f"got {result['deployed_match_weight']}")
+    # Treating the off-grid weight's absent mass as a 0.0 mean let 0.65 clear
+    # the margin against nothing and take over. Measured against the nearest
+    # real candidate its advantage is +0.01, well inside the margin.
+    check("hysteresis is enforced from an off-grid start",
+          result["deployed_match_weight"] == 0.40,
+          f"got {result['deployed_match_weight']}")
+    check("weights still sum to 1.0",
+          abs(result["deployed_match_weight"] + result["deployed_time_weight"] - 1.0) < 1e-9)
+
+
+def test_tuning_reward_denominator_uses_ranking_size():
+    print("\n-- tuning.compute_rewards (reward is normalized over the ranking) --")
+    # Guard against dividing by zero: a single rankable dish carries no signal
+    # about w, so the event must be skipped rather than scored over a
+    # one-entry ranking.
+    dishes = [Dish(name=n, ingredients={"x": True}) for n in ("a", "b", "c")]
+    rewards = tuning.compute_rewards(
+        "a", dishes, {"x"}, {"a": 10, "b": 0, "c": 0}, tuning.CANDIDATES
+    )
+    check("a one-dish ranking carries no signal", rewards is None, f"got {rewards}")
+
+    # Three cookable dishes, one of them inside the cooldown window, so the
+    # ranking the user actually saw holds two. "rich" wins on availability,
+    # "stale" wins on recency, and they trade places as w moves across the grid.
+    dishes2 = [
+        Dish(name="rich", ingredients={"x": True, "o1": False, "o2": False, "o3": False}),
+        Dish(name="stale", ingredients={"x": True}),
+        Dish(name="cooling", ingredients={"x": True}),
+    ]
+    fridge = {"x", "o1", "o2", "o3"}
+    days = {"rich": 3, "stale": 14, "cooling": 0}
+    rewards2 = tuning.compute_rewards("rich", dishes2, fridge, days, tuning.CANDIDATES)
+
+    check("a discriminating event produces rewards", rewards2 is not None, f"got {rewards2}")
+    if rewards2 is not None:
+        check("every reward is within [0, 1]",
+              all(0.0 <= v <= 1.0 for v in rewards2.values()), f"got {rewards2}")
+        # The decisive assertion. Bottom place in a two-dish ranking is 0.0.
+        # Counting the cooldown-gated dish in the denominator — which is what
+        # the bug did — would have made it (3-2)/2 = 0.5 instead.
+        check("bottom of a two-dish ranking scores exactly 0.0",
+              min(rewards2.values()) == 0.0, f"got {rewards2}")
+        check("top of a two-dish ranking scores exactly 1.0",
+              max(rewards2.values()) == 1.0, f"got {rewards2}")
+        check("low availability weight ranks the recency pick first",
+              rewards2[tuning._key(0.40)] == 0.0, f"got {rewards2}")
+        check("high availability weight ranks the cooked dish first",
+              rewards2[tuning._key(0.80)] == 1.0, f"got {rewards2}")
+
+
 def test_tuning_hysteresis():
     print("\n-- tuning.select_deployed (hysteresis) --")
     state = tuning.initialize_state()
@@ -1498,6 +1640,12 @@ def main():
     test_tuning_cold_start()
     test_tuning_shift_after_warmup()
     test_tuning_hysteresis()
+
+    # Regression tests for the code-review findings.
+    test_dish_rejects_invalid_ingredient_values()
+    test_alias_repository_cache_invalidation()
+    test_tuning_deployed_weight_off_grid()
+    test_tuning_reward_denominator_uses_ranking_size()
 
     print(f"\n{'='*40}")
     print(f"  {_passed} passed, {_failed} failed")

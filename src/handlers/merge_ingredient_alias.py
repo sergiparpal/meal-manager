@@ -77,9 +77,13 @@ def HANDLER(args: dict, **kwargs):
                 if from_count is None or to_count is None:
                     resulting_count = None  # a staple never runs out
                 else:
-                    resulting_count = min(from_count + to_count, MAX_PORTION_COUNT)
+                    resulting_count = from_count + to_count
             else:
                 resulting_count = from_count
+            # Clamp once, on the way out. Doing it only in the summing branch
+            # let a single hand-edited out-of-band count survive the merge.
+            if resulting_count is not None:
+                resulting_count = min(resulting_count, MAX_PORTION_COUNT)
             fridge[to_name] = resulting_count
             fridge_repo.save(fridge)
             fridge_merged = True

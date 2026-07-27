@@ -25,15 +25,44 @@ class JsonAliasRepository:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self.lock = threading.Lock()
+        # (file identity, parsed mapping) for the most recent successful read.
+        # ``resolve`` runs once per ingredient name at the tool boundary, so
+        # re-reading and re-parsing the file each time turned a single
+        # 100-ingredient ``add_dish`` into 100 opens and 100 JSON parses.
+        self._cache: tuple[tuple, dict[str, str]] | None = None
 
-    def load(self) -> dict[str, str]:
-        """Load the alias map; a missing or unreadable file yields ``{}``.
+    def _identity(self):
+        """Stat fingerprint of the file, or ``None`` when it is not there.
 
-        Reads are lock-free, matching the other repositories: writes land via
-        atomic replacement, so a reader sees either the old map or the new one.
+        ``atomic_write_json`` replaces the file rather than rewriting it in
+        place, and the replacement is created while the old one still exists,
+        so the inode is guaranteed to differ across writes. That is a stronger
+        signal than mtime alone, whose filesystem resolution is coarse enough
+        (a timer tick) for two quick writes to share a timestamp. ``configure``
+        retargets ``path``, so the path belongs in the key too.
         """
-        if not self.path.exists():
+        try:
+            stat = self.path.stat()
+        except OSError:
+            return None
+        return (str(self.path), stat.st_ino, stat.st_mtime_ns, stat.st_size)
+
+    def _mapping(self) -> dict[str, str]:
+        """Shared view of the alias map. Callers must not mutate the result."""
+        identity = self._identity()
+        if identity is None:
+            self._cache = None
             return {}
+        cached = self._cache
+        if cached is not None and cached[0] == identity:
+            return cached[1]
+        mapping = self._parse()
+        # One attribute store, so a concurrent reader sees either the previous
+        # tuple or the new one — never a half-updated pair.
+        self._cache = (identity, mapping)
+        return mapping
+
+    def _parse(self) -> dict[str, str]:
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -59,8 +88,23 @@ class JsonAliasRepository:
             mapping[alias] = canonical
         return mapping
 
+    def load(self) -> dict[str, str]:
+        """Load the alias map; a missing or unreadable file yields ``{}``.
+
+        Reads are lock-free, matching the other repositories: writes land via
+        atomic replacement, so a reader sees either the old map or the new one.
+
+        Returns a fresh copy every call — ``add`` mutates what it gets back,
+        and the mapping behind :meth:`_mapping` is shared.
+        """
+        return dict(self._mapping())
+
     def save(self, mapping: dict) -> None:
         atomic_write_json(self.path, mapping)
+        # The stat fingerprint would catch this on its own, but dropping the
+        # cache here makes writes through the repository exact rather than
+        # merely near-certain.
+        self._cache = None
 
     def resolve(self, name: str) -> str:
         """Return the canonical spelling of *name*, or *name* itself.
@@ -69,7 +113,7 @@ class JsonAliasRepository:
         points at another alias, so a chain cannot form — and a loop here would
         hang on a hand-edited file that contains a cycle.
         """
-        return self.load().get(name, name)
+        return self._mapping().get(name, name)
 
     def add(self, alias: str, canonical: str) -> None:
         """Record that *alias* means *canonical*, keeping the map chain-free."""

@@ -236,6 +236,14 @@ class IngredientSessionStore:
                     continue
                 except OSError:
                     continue  # transient read error — leave the file intact
+                if not isinstance(data, dict):
+                    # Valid JSON of the wrong shape is still a corrupt backup.
+                    # Reading ``last_activity`` off it raised AttributeError,
+                    # which escaped cleanup_expired() and then get(), so one
+                    # stray file turned every DII tool into an error envelope —
+                    # including the sweep that would have removed it.
+                    fpath.unlink(missing_ok=True)
+                    continue
                 last = parse_iso_to_aware(data.get("last_activity"))
                 if last < cutoff:
                     fpath.unlink(missing_ok=True)

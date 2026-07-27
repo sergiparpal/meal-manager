@@ -40,12 +40,17 @@ def commit(
     committed_fridge = False
     committed_dish = False
 
-    # Hold the fridge lock across the entire commit so that, on a dish-write
-    # failure, the rollback undoes exactly this call's additions with no
-    # concurrent fridge writer able to interleave (which a release-then-remove
-    # rollback could otherwise clobber). No path acquires dish-before-fridge, so
-    # nesting the dish lock inside the fridge lock introduces no lock cycle.
-    with fridge_repo.lock:
+    # Both locks are held across the whole commit so that, on a dish-write
+    # failure, the rollback undoes exactly this call's fridge additions with no
+    # concurrent writer able to interleave (which a release-then-remove rollback
+    # could otherwise clobber).
+    #
+    # They are taken dish-before-fridge to match the documented ``alias -> dish
+    # -> fridge`` order. This is the only place in the package that holds two
+    # repository locks at once — every other multi-repo handler acquires and
+    # releases them one at a time — so the order here is what any future nesting
+    # has to agree with. Inverting it deadlocks.
+    with dish_repo.lock, fridge_repo.lock:
         added_to_fridge: list[str] = []
         if commit_to_fridge and all_ingredients:
             fridge = fridge_repo.load()
@@ -61,21 +66,24 @@ def commit(
             # ingredients (or create a meaningless empty dish), so never write
             # the catalog unless there is at least one ingredient to commit.
             if commit_to_dish and ingredient_map:
-                with dish_repo.lock:
-                    dishes = dish_repo.load()
-                    existing = next(
-                        (d for d in dishes if d.name == session.dish_name),
-                        None,
-                    )
-                    if existing is not None:
-                        existing.ingredients = ingredient_map
-                    else:
-                        new_dish = Dish(name=session.dish_name)
-                        for ing, essential in ingredient_map.items():
-                            new_dish.add_ingredient(ing, essential)
-                        dishes.append(new_dish)
-                    dish_repo.save(dishes)
-                    committed_dish = True
+                dishes = dish_repo.load()
+                existing = next(
+                    (d for d in dishes if d.name == session.dish_name),
+                    None,
+                )
+                if existing is not None:
+                    # Already validated: every name came through
+                    # Dish.normalize_ingredient and every flag through the
+                    # engine's boolean check, so this assignment cannot
+                    # reintroduce the shapes Dish.__post_init__ rejects.
+                    existing.ingredients = ingredient_map
+                else:
+                    new_dish = Dish(name=session.dish_name)
+                    for ing, essential in ingredient_map.items():
+                        new_dish.add_ingredient(ing, essential)
+                    dishes.append(new_dish)
+                dish_repo.save(dishes)
+                committed_dish = True
         except Exception:
             if added_to_fridge:
                 try:

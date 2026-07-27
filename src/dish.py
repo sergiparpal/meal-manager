@@ -30,6 +30,15 @@ class Dish:
             normalized = {}
             for key, value in self.ingredients.items():
                 ingredient = self.normalize_ingredient(key)
+                # The same checks ``add_ingredient`` applies. Without them,
+                # direct construction accepted an empty name and a non-boolean
+                # flag, and ``can_cook_with`` then read any truthy value as
+                # essential — so ``{"": "yes"}`` became a nameless blocking
+                # ingredient no fridge could ever satisfy.
+                if not ingredient:
+                    raise ValueError("ingredient name cannot be empty")
+                if not isinstance(value, bool):
+                    raise ValueError("ingredient essential flag must be a boolean")
                 # Two keys that collide after normalization carry contradictory
                 # flags ({"Rice": True, "rice": False}); silently keeping one
                 # would drop a declaration the caller made on purpose.

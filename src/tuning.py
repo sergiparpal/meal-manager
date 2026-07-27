@@ -152,8 +152,7 @@ def compute_rewards(cooked_name, dishes, fridge_set, days_map, candidates):
     cookable = [d for d in dishes if d.can_cook_with(fridge_set)]
     if not any(d.name == cooked_name for d in cookable):
         return None
-    N = len(cookable)
-    if N < 2:
+    if len(cookable) < 2:
         return None
 
     # Both score terms depend only on the fridge/history snapshot, never on w,
@@ -167,6 +166,16 @@ def compute_rewards(cooked_name, dishes, fridge_set, days_map, candidates):
         components = score_components(dish, fridge_set, days)
         if components is not None:
             scored.append((dish.name, components))
+
+    # The reward is a normalized rank, so the denominator has to be the size of
+    # the ranking the dish was actually placed in — ``scored``, not every
+    # cookable dish. Dishes gated out by the cooldown never appear in any
+    # candidate's ranking, so counting them stretched the scale and pushed every
+    # reward toward 1.0 whenever the catalog was mostly on cooldown. A
+    # single-entry ranking says nothing about ``w`` (and would divide by zero).
+    N = len(scored)
+    if N < 2:
+        return None
 
     rewards: dict[str, float] = {}
     found_any = False
@@ -235,11 +244,19 @@ def select_deployed(state: dict) -> dict:
         in_band = [w for w in candidates if BAND[0] <= w <= BAND[1]]
         if not in_band:
             in_band = [PRIOR_W]
+        # BAND's lower bound (0.35) sits below the candidate grid (0.40+), and
+        # deployed_weights clamps into BAND, so the stored weight can be a value
+        # that carries no accumulated mass. _mean would report 0.0 for it and
+        # every candidate would clear HYSTERESIS_MARGIN on the spot, skipping
+        # the gate entirely. Compare against — and redeploy onto — the nearest
+        # real candidate instead, which also walks an off-grid weight back onto
+        # the grid. For a weight already on the grid this is exactly itself.
+        current = min(in_band, key=lambda w: (abs(w - current_mw), w))
         best = max(in_band, key=lambda w: _mean(state, _key(w)))
-        if _mean(state, _key(best)) - _mean(state, _key(current_mw)) > HYSTERESIS_MARGIN:
+        if _mean(state, _key(best)) - _mean(state, _key(current)) > HYSTERESIS_MARGIN:
             deployed_w = best
         else:
-            deployed_w = current_mw
+            deployed_w = current
 
     deployed_w = _clamp_to_band(deployed_w)
     state["deployed_match_weight"] = deployed_w

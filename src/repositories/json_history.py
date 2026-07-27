@@ -202,6 +202,16 @@ class JsonHistoryRepository:
             raise HistoryDataError(
                 f"{self.path.name} is not valid JSON"
             ) from exc
+        except OSError as exc:
+            # Also a HistoryDataError, so ``load_events(strict=False)`` can keep
+            # its promise to yield an empty log for unreadable storage. Letting
+            # OSError through meant a permissions glitch on history.json took
+            # down get_meal_suggestions entirely, while the same glitch on
+            # dishes.json or fridge.json degraded quietly. Only the name is
+            # interpolated — the full path stays in the log, not the envelope.
+            raise HistoryDataError(
+                f"{self.path.name} could not be read"
+            ) from exc
         return self._migrate(raw)
 
     def _migrate(self, raw) -> list[CookingEvent]:

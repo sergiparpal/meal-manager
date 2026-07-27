@@ -1406,6 +1406,180 @@ def test_dii_finalize_empty_selection_no_wipe():
           f"got: {precious and precious.ingredients}")
 
 
+def test_dii_init_resolves_aliases():
+    print("\n-- DII init canonicalizes ingredient names --")
+    _clear_aliases()
+    # Retire "al_dii_old" in favour of "al_dii_new" before the session exists.
+    merge_ingredient_alias({"from_name": "al_dii_old", "to_name": "al_dii_new"})
+
+    state = parse(init_ingredient_session({
+        "dish_name": "Alias DII Dish",
+        "ingredients": ["al_dii_old", "al_dii_keep"],
+        "is_essential": [True, True],
+        "pre_select_top_n": 2,
+    }))
+    check("session stores the canonical spelling",
+          state["essential_ingredients"] == ["al_dii_new", "al_dii_keep"],
+          f"got {state['essential_ingredients']}")
+
+    # The whole point: what gets committed must not resurrect the retired name.
+    parse(finalize_ingredient_session({"session_id": state["session_id"]}))
+    recipe = parse(get_dish_recipe({"dish_name": "Alias DII Dish"}))
+    check("catalog receives the canonical name",
+          "al_dii_new" in recipe["essential"] and "al_dii_old" not in recipe["essential"],
+          f"got {recipe}")
+    fridge = _repos_mod.fridge_repo.load()
+    check("fridge receives the canonical name",
+          "al_dii_new" in fridge and "al_dii_old" not in fridge,
+          f"got {sorted(fridge)}")
+
+
+def test_dii_remove_resolves_aliases():
+    print("\n-- DII remove canonicalizes ingredient names --")
+    _clear_aliases()
+    merge_ingredient_alias({"from_name": "al_rm_old", "to_name": "al_rm_new"})
+
+    state = parse(init_ingredient_session({
+        "dish_name": "Alias DII Remove",
+        "ingredients": ["al_rm_base"],
+        "is_essential": [True],
+        "pre_select_top_n": 1,
+    }))
+    sid = state["session_id"]
+
+    added = parse(dii_add_manual({"session_id": sid, "ingredient": "al_rm_old"}))
+    check("add_manual canonicalizes",
+          "al_rm_new" in added["essential_ingredients"], f"got {added}")
+
+    # Removing by the spelling the user typed has to find the canonical entry,
+    # or an ingredient added this way could never be taken back out.
+    removed = parse(dii_remove_ingredient({"session_id": sid, "ingredient": "al_rm_old"}))
+    check("remove by the retired spelling still removes it",
+          "al_rm_new" not in removed["essential_ingredients"], f"got {removed}")
+    check("removal is not reported as a no-op",
+          removed.get("no_change") is not True, f"got {removed}")
+
+
+def test_dii_corrupt_session_backup_is_swept():
+    print("\n-- DII survives a malformed session backup file --")
+    sessions = _TMP_DATA_DIR / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    # Valid JSON of the wrong shape. Reading last_activity off it raised
+    # AttributeError out of the orphan sweep, which took down every DII tool —
+    # including the sweep that should have removed the file.
+    junk = sessions / "mm_junk_backup.json"
+    junk.write_text("[]", encoding="utf-8")
+
+    store = _dii_mod._store
+    store._last_cleanup_monotonic = 0.0  # defeat the debounce
+
+    state = parse(init_ingredient_session({
+        "dish_name": "Junk Backup Dish",
+        "ingredients": ["jb_one"],
+        "is_essential": [True],
+        "pre_select_top_n": 1,
+    }))
+    check("DII still works with a malformed backup present",
+          "error" not in state, f"got {state}")
+
+    store._last_cleanup_monotonic = 0.0
+    read_back = parse(dii_get_state({"session_id": state["session_id"]}))
+    check("reads still work", "error" not in read_back, f"got {read_back}")
+    check("the malformed backup is swept away", not junk.exists())
+
+
+def test_update_fridge_add_clamps_to_max():
+    print("\n-- update_fridge_inventory add respects the portion ceiling --")
+    cap = _handlers_common.MAX_PORTION_COUNT
+    update_fridge_inventory({"action": "set", "ingredients": {"clamp_me": cap}})
+    update_fridge_inventory({"action": "add", "ingredients": {"clamp_me": cap}})
+    fridge = _repos_mod.fridge_repo.load()
+    check("a running total cannot exceed MAX_PORTION_COUNT",
+          fridge.get("clamp_me") == cap, f"got {fridge.get('clamp_me')}")
+
+
+def test_update_fridge_expiry_on_staple():
+    print("\n-- update_fridge_inventory records an expiry on a pantry staple --")
+    update_fridge_inventory({"action": "set", "ingredients": {"staple_oil": None}})
+    msg = update_fridge_inventory({"action": "add", "ingredients": {
+        "staple_oil": {"count": 1, "expires_on": "2026-12-01"},
+    }})
+    entries = _repos_mod.fridge_repo.load_entries()
+    check("the date is stored rather than discarded",
+          entries.get("staple_oil", {}).get("expires_on") == "2026-12-01",
+          f"got {entries.get('staple_oil')}")
+    check("it stays a staple", entries.get("staple_oil", {}).get("count") is None,
+          f"got {entries.get('staple_oil')}")
+    check("the message reports the expiry", "Expiry recorded" in msg, f"got {msg}")
+
+    # A staple with no date supplied is still the old no-op.
+    msg2 = update_fridge_inventory({"action": "add", "ingredients": {"staple_oil": 2}})
+    check("a plain add onto a staple is still a no-op",
+          "already a pantry staple" in msg2, f"got {msg2}")
+
+
+def test_merge_alias_clamps_out_of_band_count():
+    print("\n-- merge_ingredient_alias clamps a passthrough count --")
+    _clear_aliases()
+    cap = _handlers_common.MAX_PORTION_COUNT
+    # Only reachable by hand-editing, but the merge used to copy it verbatim
+    # because only the summing branch clamped.
+    _repos_mod.fridge_repo.save_entries(
+        {"oob_from": {"count": 5000, "expires_on": None}}
+    )
+    res = parse(merge_ingredient_alias({"from_name": "oob_from", "to_name": "oob_to"}))
+    check("the merged count is clamped", res.get("resulting_count") == cap, f"got {res}")
+
+
+def test_init_session_rejects_bad_pre_select():
+    print("\n-- init_ingredient_session validates pre_select_top_n --")
+    base = {
+        "dish_name": "Pre Select Dish",
+        "ingredients": ["ps_a", "ps_b", "ps_c", "ps_d"],
+        "is_essential": [True, True, True, True],
+    }
+    for bad in ("garbage", 3.9, True):
+        res = parse(init_ingredient_session({**base, "pre_select_top_n": bad}))
+        check(f"pre_select_top_n={bad!r} rejected",
+              "error" in res and "integer" in res["error"], f"got {res}")
+
+    res = parse(init_ingredient_session({**base, "pre_select_top_n": 2}))
+    check("a valid value is still honoured",
+          res.get("essential_ingredients") == ["ps_a", "ps_b"], f"got {res}")
+    res = parse(init_ingredient_session(base))
+    check("an omitted value still defaults to 3",
+          res.get("essential_ingredients") == ["ps_a", "ps_b", "ps_c"], f"got {res}")
+
+
+def test_history_unreadable_degrades_and_reports():
+    print("\n-- unreadable history.json: suggestions degrade, reporting errors --")
+    path = _TMP_DATA_DIR / "history.json"
+    original = path.read_text(encoding="utf-8")
+    path.chmod(0o000)
+    try:
+        # Root ignores the mode bits, so only assert when the chmod took.
+        try:
+            path.read_text(encoding="utf-8")
+            enforced = False
+        except OSError:
+            enforced = True
+
+        if enforced:
+            suggestions = parse(get_meal_suggestions({}))
+            check("get_meal_suggestions degrades instead of erroring",
+                  isinstance(suggestions, list), f"got {suggestions}")
+            listed = parse(list_cooking_history({}))
+            check("list_cooking_history still surfaces the problem",
+                  "error" in listed, f"got {listed}")
+            check("the envelope names the file, not its path",
+                  "/" not in listed.get("error", "/"), f"got {listed}")
+        else:
+            check("history permission test skipped (running as root)", True)
+    finally:
+        path.chmod(0o644)
+        path.write_text(original, encoding="utf-8")
+
+
 def test_dii_store_ttl_and_recovery():
     print("\n-- DII store: TTL expiry, crash recovery, traversal guard --")
     store_mod = importlib.import_module(".src.dii.store", _PLUGIN_DIR.name)
@@ -1654,6 +1828,16 @@ def main():
         test_merge_ingredient_alias_boundary_resolution()
         test_merge_ingredient_alias_unlocks_a_dish()
         test_merge_ingredient_alias_errors()
+
+        # Regression tests for the code-review findings.
+        test_dii_init_resolves_aliases()
+        test_dii_remove_resolves_aliases()
+        test_dii_corrupt_session_backup_is_swept()
+        test_update_fridge_add_clamps_to_max()
+        test_update_fridge_expiry_on_staple()
+        test_merge_alias_clamps_out_of_band_count()
+        test_init_session_rejects_bad_pre_select()
+        test_history_unreadable_degrades_and_reports()
 
         # These overwrite dishes.json wholesale — keep them last.
         test_dii_session_id_traversal_rejected()

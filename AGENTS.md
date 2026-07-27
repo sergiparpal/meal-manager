@@ -133,7 +133,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 
 - Each file-backed store singleton owns its own `threading.Lock` instance attribute (`self.lock` on the dish, fridge, alias, and tuning repos; `self._lock` on the history repo).
 - Hold the appropriate lock around load-modify-save sequences.
-- **Lock order is `alias -> dish -> fridge`.** Acquire them in that order and never the reverse.
+- **Lock order is `alias -> dish -> fridge`.** Acquire them in that order and never the reverse. `src/dii/finalizer.py` is the only place that holds two repository locks at once (`with dish_repo.lock, fridge_repo.lock:`), so it is the constraint any future nesting has to agree with — every other multi-repo handler acquires and releases one lock at a time.
 - **Normalize arguments before acquiring any repository lock.** `_common.normalize_ingredient_name` reads the alias map, so normalizing inside a `dish_repo.lock` / `fridge_repo.lock` block inverts the documented order. Every handler normalizes first, then locks.
 - DII sessions also use per-session locks plus a global lock for session maps. Always take a session lock through the `IngredientSessionStore.session_lock(session_id)` context manager, which reference-counts holders and prunes the entry itself. Never delete from `_locks` anywhere else: removing a lock does not release it, so a holder mid-critical-section and the next caller end up on different mutexes.
 - Do not bypass the locking helpers when changing persistence behavior.
@@ -149,12 +149,13 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 - `False` means optional.
 - Dishes cooked fewer than 2 days ago are excluded from suggestions.
 - Scoring never rewards essentials — they are a gate enforced by `can_cook_with`. The match term is the count of *optional* ingredients in stock, capped at `OPTIONAL_CAP`.
-- The fridge stores portion counts: `None` = pantry staple (unlimited), `0` = known out of stock, `n > 0` = roughly `n` dishes' worth.
+- The fridge stores portion counts: `None` = pantry staple (unlimited), `0` = known out of stock, `n > 0` = roughly `n` dishes' worth. `MAX_PORTION_COUNT` bounds the stored value, not merely the argument, so every path that produces a count (`add`'s running total, an alias merge) clamps to it.
 - `register_cooked_meal` consumes one portion of each essential ingredient after recording the meal; staples are untouched and counts floor at 0 rather than being deleted. It accepts an optional ISO `date` for backdated cooks, which skip the learning update.
 - Cooking history is an append-only event log, projected to one date per dish on read. `history_repo.load()` returns the latest `cooked_on` per dish with retracted events excluded, so backdating a forgotten meal cannot rewind a more recent cook — that is a property of the model now, not a flag on the write.
 - Retraction and deletion are different operations. `delete_history_entry` retracts (the row survives, visible through `list_cooking_history`, and stops counting toward the projection); `register_cooked_meal`'s rollback path calls `delete_event` (hard delete, because a cook that failed halfway never happened); `delete_dish` retracts every event for the dish it removes.
 - Ingredient aliases canonicalize input at the tool boundary only. `_common.normalize_ingredient_name` resolves them; `Dish.normalize_ingredient` deliberately does not, so the domain layer stays pure and I/O-free. Do not "fix" that asymmetry.
-- On an alias merge, essential wins over optional in a recipe, and in the fridge a pantry staple wins over any count while two counts sum (clamped to `MAX_PORTION_COUNT`).
+- On an alias merge, essential wins over optional in a recipe, and in the fridge a pantry staple wins over any count while two counts sum. The result is clamped to `MAX_PORTION_COUNT` on the way out, so a hand-edited out-of-band count is normalized rather than copied through.
+- Alias resolution is the whole tool boundary's job, DII handlers included: `init_ingredient_session` builds sessions from canonical names and `dii_remove_ingredient` resolves before looking one up. Validating a name and then using the raw one leaves the DII path blind to aliases.
 - Fridge entries may carry `expires_on`. Expired items stay available and are only flagged — the date is the user's estimate, not ground truth. The tool boundary is strict about the date format; the loader is forgiving and drops an unreadable date rather than the ingredient.
 - `Dish.instructions` is optional free-form text capped at `MAX_INSTRUCTIONS_LENGTH`; blank normalizes to `None` so "cleared" and "never set" stay a single state.
 - Colliding normalized names in a dict argument are rejected, not silently merged — the values can disagree. List arguments still collapse repeats. `Dish.from_dict` stays permissive so existing catalog rows keep loading.
