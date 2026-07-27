@@ -38,7 +38,7 @@ SCHEMA = {
 }
 
 
-@tool_handler(NAME)
+@tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
     max_missing = args.get("max_missing", 1) if isinstance(args, dict) else 1
     if isinstance(max_missing, bool) or not isinstance(max_missing, int):

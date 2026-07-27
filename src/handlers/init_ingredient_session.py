@@ -98,7 +98,7 @@ def _resolve_session_id(provided):
     return validate_session_id(provided.strip()), True
 
 
-@tool_handler(NAME)
+@tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
     dish_name = normalize_dish_name(require_arg(args, "dish_name"))
     ingredients = maybe_parse_json_arg(require_arg(args, "ingredients"))

@@ -26,6 +26,7 @@ _shopping_mod = importlib.import_module(".src.shopping", _PLUGIN_DIR.name)
 _tuning_mod = importlib.import_module(".src.tuning", _PLUGIN_DIR.name)
 _handlers_common = importlib.import_module(".src.handlers._common", _PLUGIN_DIR.name)
 _repos_mod = importlib.import_module(".src.repositories", _PLUGIN_DIR.name)
+reject_unknown_args = _handlers_common.reject_unknown_args
 
 Dish = _dish_mod.Dish
 calculate_score = _suggestion_mod.calculate_score
@@ -512,6 +513,70 @@ def test_history_set_entry_only_if_newer():
 
 
 # ---------------------------------------------------------------------------
+# Handler argument validation
+# ---------------------------------------------------------------------------
+
+
+def test_reject_unknown_args():
+    print("\n-- reject_unknown_args --")
+    allowed = {"dish_name", "date"}
+
+    ok = True
+    try:
+        reject_unknown_args({}, allowed)
+        reject_unknown_args({"dish_name": "paella"}, allowed)
+        reject_unknown_args({"dish_name": "paella", "date": "2026-01-01"}, allowed)
+    except ValueError:
+        ok = False
+    check("declared keys pass", ok)
+
+    try:
+        reject_unknown_args({"dish_name": "paella", "qty": 2}, allowed)
+        check("unknown key raises", False, "no exception")
+    except ValueError as exc:
+        check("unknown key raises ValueError naming it", "qty" in str(exc), str(exc))
+
+    try:
+        reject_unknown_args(["dish_name"], allowed)
+        check("non-dict args raises", False, "no exception")
+    except ValueError as exc:
+        check("non-dict args raises ValueError", "object" in str(exc), str(exc))
+
+    widened = True
+    try:
+        reject_unknown_args({"dish_name": "paella", "trace_id": "x"},
+                            allowed | {"trace_id"})
+    except ValueError:
+        widened = False
+    check("extra_args widens the allowed set", widened)
+
+
+def test_tool_handler_validates_against_schema():
+    print("\n-- tool_handler (schema-derived validation) --")
+    schema = {"type": "object", "properties": {"a": {"type": "string"}}}
+
+    @_handlers_common.tool_handler("fake_tool", schema)
+    def handler(args, **kwargs):
+        return {"ok": args.get("a")}
+
+    import json as _json
+    good = _json.loads(handler({"a": "x"}))
+    check("declared argument passes through", good == {"ok": "x"}, f"got {good}")
+
+    bad = _json.loads(handler({"a": "x", "b": 1}))
+    check("unknown argument returns an error envelope", "error" in bad, f"got {bad}")
+    check("error names the offending key", "b" in bad.get("error", ""), f"got {bad}")
+
+    @_handlers_common.tool_handler("legacy_tool")
+    def legacy(args, **kwargs):
+        return {"ok": True}
+
+    unvalidated = _json.loads(legacy({"anything": 1}))
+    check("schema=None stays unvalidated", unvalidated == {"ok": True},
+          f"got {unvalidated}")
+
+
+# ---------------------------------------------------------------------------
 # _normalize_ingredients tests
 # ---------------------------------------------------------------------------
 
@@ -903,6 +968,9 @@ def main():
     test_normalize_ingredients_dedup_under_limit()
     test_normalize_ingredients_rejects_colliding_dict_keys()
     test_normalize_ingredient_names()
+
+    test_reject_unknown_args()
+    test_tool_handler_validates_against_schema()
 
     test_tuning_initial_state()
     test_tuning_deployed_weights_fallback()

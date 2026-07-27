@@ -22,7 +22,7 @@ SCHEMA = {
 }
 
 
-@tool_handler(NAME)
+@tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
     fridge = fridge_repo.load()
     return {

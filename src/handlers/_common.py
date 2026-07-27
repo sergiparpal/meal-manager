@@ -37,20 +37,48 @@ MAX_PORTION_COUNT = 99
 # of the success result, logging + structured error envelope on failure.
 # Handlers return Python objects and raise on validation/business errors.
 
-def tool_handler(name: str):
+def reject_unknown_args(args: dict, allowed: set[str]) -> None:
+    """Raise unless every key in *args* is declared in *allowed*.
+
+    An unknown key means the caller's mental model of the tool is wrong
+    (``dish_name`` for ``name``, ``qty`` for a count). Silently ignoring it
+    either surfaces as a confusing "missing argument" error about a different
+    key, or lets the handler run with defaults the caller never asked for.
+    """
+    if not isinstance(args, dict):
+        raise ValueError("tool arguments must be an object")
+    unknown = set(args) - allowed
+    if unknown:
+        raise ValueError(f"unknown arguments: {sorted(unknown)}")
+
+
+def tool_handler(name: str, schema: dict | None = None, *, extra_args: set | None = None):
     """Wrap a tool function with JSON serialization and a unified error envelope.
 
     The wrapped function returns a Python object (dict, list, str, ...). On
     success it is encoded with ``json.dumps(..., ensure_ascii=False)``. Any
     exception is logged via ``logger.exception`` and surfaced as
-    ``{"error": str(exc)}`` so all tool errors share one shape.
+    ``{"error": ...}`` so all tool errors share one shape.
+
+    When *schema* is supplied, incoming ``args`` keys are validated against
+    ``schema["properties"]`` (widened by *extra_args*) before the handler runs.
+    Deriving the allowed set from the schema itself means the check can never
+    drift from the tool's declared interface. ``schema=None`` keeps the
+    unvalidated behaviour.
     """
     log = logging.getLogger(f"meal_manager.handlers.{name}")
+    allowed = None
+    if schema is not None:
+        allowed = set(schema.get("properties", {})) | (extra_args or set())
 
     def decorate(fn):
         @functools.wraps(fn)
         def runner(args, **kwargs):
             try:
+                # Inside the try on purpose: a rejected argument must come back
+                # through the normal error envelope, not escape the wrapper.
+                if allowed is not None:
+                    reject_unknown_args(args, allowed)
                 return json.dumps(fn(args, **kwargs), ensure_ascii=False)
             except Exception as exc:
                 log.exception("%s failed", name)

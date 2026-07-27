@@ -32,7 +32,7 @@ SCHEMA = {
 }
 
 
-@tool_handler(NAME)
+@tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
     # Bool validation of the commit flags lives in finalize_session (the API
     # layer), so it is not duplicated here.

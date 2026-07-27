@@ -30,7 +30,7 @@ SCHEMA = {
 }
 
 
-@tool_handler(NAME)
+@tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
     # is_essential bool validation lives in engine.add_manual (the single owner).
     ingredient = normalize_ingredient_name(require_arg(args, "ingredient"))

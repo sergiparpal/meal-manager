@@ -71,7 +71,7 @@ def _remove(names: list[str]) -> str:
     return msg
 
 
-@tool_handler(NAME)
+@tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
     action = require_arg(args, "action")
     raw_items = require_arg(args, "ingredients")

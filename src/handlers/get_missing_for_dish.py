@@ -23,7 +23,7 @@ SCHEMA = {
 }
 
 
-@tool_handler(NAME)
+@tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
     raw_name = require_arg(args, "dish_name")
     name = normalize_dish_name(raw_name)

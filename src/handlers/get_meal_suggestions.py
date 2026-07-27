@@ -20,7 +20,7 @@ SCHEMA = {
 }
 
 
-@tool_handler(NAME)
+@tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
     dishes = dish_repo.load()
     fridge = fridge_repo.load_set()

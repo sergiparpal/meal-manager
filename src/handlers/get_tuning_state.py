@@ -21,7 +21,7 @@ SCHEMA = {
 }
 
 
-@tool_handler(NAME)
+@tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
     state = tuning_repo.load()
     availability_weight, recency_weight = tuning.deployed_weights(state)

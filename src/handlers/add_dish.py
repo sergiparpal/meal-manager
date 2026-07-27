@@ -47,7 +47,7 @@ SCHEMA = {
 }
 
 
-@tool_handler(NAME)
+@tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
     ingredients = normalize_ingredients(require_arg(args, "ingredients"))
     name = normalize_dish_name(require_arg(args, "name"))

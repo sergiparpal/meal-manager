@@ -21,6 +21,6 @@ SCHEMA = {
 }
 
 
-@tool_handler(NAME)
+@tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
     return skip_suggested_ingredient(require_arg(args, "session_id"))

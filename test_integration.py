@@ -830,6 +830,27 @@ def test_missing_required_arg_message():
           and "required" in res2["error"].lower(), f"got: {res2}")
 
 
+def test_unknown_argument_rejected():
+    print("\n-- validation: unknown arguments are rejected --")
+    res = parse(add_dish({
+        "dish_name": "Wrong Key",  # the real argument is 'name'
+        "ingredients": {"a": True},
+    }))
+    check("unknown argument returns an error envelope",
+          "error" in res and "dish_name" in res["error"], f"got: {res}")
+
+    res2 = parse(list_fridge({"limit": 5}))
+    check("no-argument tool also rejects unknown keys",
+          "error" in res2 and "limit" in res2["error"], f"got: {res2}")
+
+    res3 = parse(register_cooked_meal({"dish_name": "Arroz con Pollo", "qty": 2}))
+    check("unknown key rejected before the handler runs",
+          "error" in res3 and "qty" in res3["error"], f"got: {res3}")
+
+    ok = parse(list_fridge({}))
+    check("valid empty arguments still succeed", "error" not in ok, f"got: {ok}")
+
+
 def test_add_dishes_batch_partial_failure():
     print("\n-- add_dishes_batch: partial failure keeps valid dishes --")
     res = parse(add_dishes_batch({"dishes": [
@@ -1106,6 +1127,7 @@ def main():
         # first; the two that overwrite dishes.json wholesale run last so they
         # cannot perturb the catalog the earlier assertions depend on.
         test_missing_required_arg_message()
+        test_unknown_argument_rejected()
         test_add_dishes_batch_partial_failure()
         test_dii_remove_optional_no_recalc()
         test_edit_dish_empty_rejected()

@@ -22,6 +22,6 @@ SCHEMA = {
 }
 
 
-@tool_handler(NAME)
+@tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
     return get_session_state(require_arg(args, "session_id"))
