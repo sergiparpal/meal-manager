@@ -27,3 +27,19 @@ jobs:
 
       - name: Integration smoke test
         run: python3 test_integration.py
+
+  ci-complete:
+    # One stable check name for the branch ruleset to require. Matrix legs come and go, so
+    # requiring them individually would turn a dropped Python version into a required check
+    # that never reports again — and an unsatisfiable required check blocks every merge.
+    # This job depends on the ones that must pass and fails unless all of them succeeded.
+    if: always()
+    needs: [tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail unless every required job succeeded
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: |
+          echo "A required job did not succeed:"
+          echo '${{ toJSON(needs) }}'
+          exit 1
