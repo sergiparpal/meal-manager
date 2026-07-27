@@ -39,7 +39,9 @@ def HANDLER(args: dict, **kwargs):
         dish_repo.save(remaining)
 
     try:
-        history_repo.remove_entry(name)
+        # The dish is gone, so its cooks must stop gating suggestions — but
+        # retract rather than erase: the log still records that they happened.
+        history_repo.retract_all_for_dish(name)
     except Exception:
         try:
             dish_repo.restore(deleted)

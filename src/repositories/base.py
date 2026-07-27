@@ -44,25 +44,32 @@ class FridgeRepository(Protocol):
 class HistoryRepository(Protocol):
     """Persistence boundary for cooking history.
 
-    History is keyed by normalized dish name and value is an ISO date string.
+    History is an append-only log of :class:`CookingEvent`, projected on read
+    to one date per dish (``{normalized dish name: ISO date string}``) — the
+    shape the scoring path consumes. Because the projection takes the latest
+    ``cooked_on`` per dish, an older event can never displace a newer one.
+
+    Retraction (``retract_event`` / ``retract_latest_for_dish``) is the user's
+    undo: the row survives and stays readable, it just stops counting toward
+    the projection. ``delete_event`` is the hard delete reserved for rollback,
+    where a cook that failed halfway must leave no trace at all.
+
     The repository owns its own locking — callers do not hold it.
     """
 
     def load(self) -> dict[str, str]: ...
-    def set_entry(
+    def load_events(self, *, strict: bool = False) -> list: ...
+    def append_event(
         self,
         dish_name: str,
-        date_str: str,
+        cooked_on,
         *,
-        only_if_newer: bool = False,
-    ) -> str | None: ...
-    def remove_entry(self, dish_name: str) -> bool: ...
-    def revert_entry(
-        self,
-        dish_name: str,
-        expected_value: str,
-        previous_value: str | None,
-    ) -> bool: ...
+        backfilled: bool = False,
+    ): ...
+    def retract_event(self, event_id: str): ...
+    def retract_latest_for_dish(self, dish_name: str): ...
+    def retract_all_for_dish(self, dish_name: str) -> list: ...
+    def delete_event(self, event_id: str) -> bool: ...
 
 
 class TuningRepository(Protocol):

@@ -255,7 +255,7 @@ def test_cook_decrements_instead_of_deleting():
 
     # Drain it and confirm the zero entry is kept and excluded from availability.
     update_fridge_inventory({"action": "set", "ingredients": {"cnt_a": 1}})
-    _repos_mod.history_repo.remove_entry("count dish")
+    _repos_mod.history_repo.retract_all_for_dish("count dish")
     register_cooked_meal({"dish_name": "Count Dish"})
     check("count floors at zero", _repos_mod.fridge_repo.load().get("cnt_a") == 0)
     check("zero-count entry is not available",
@@ -444,7 +444,17 @@ def test_register_cooked_meal_rollback():
 def test_delete_history_entry():
     print("\n-- delete_history_entry --")
     result = parse(delete_history_entry({"dish_name": "arroz con pollo"}))
-    check("success message", isinstance(result, str) and "removed" in result.lower())
+    check("success message", isinstance(result, str) and "retracted" in result.lower(),
+          f"got: {result}")
+    check("dish leaves the projection",
+          "arroz con pollo" not in _repos_mod.history_repo.load(),
+          f"got {_repos_mod.history_repo.load()}")
+    # Retraction is not deletion: the row survives so the user can still see
+    # that the cook was recorded and taken back.
+    check("the retracted event survives in the log",
+          any(e.dish_name == "arroz con pollo" and not e.active
+              for e in _repos_mod.history_repo.load_events()),
+          f"got {[e.to_dict() for e in _repos_mod.history_repo.load_events()]}")
 
 
 def test_delete_history_entry_bogus():
@@ -789,7 +799,7 @@ def test_online_weight_tuning():
     update_fridge_inventory({"action": "set", "ingredients": {
         "tun_a": 5, "tun_b": 5, "tun_o1": None, "tun_o2": None, "tun_o3": None,
     }})
-    _repos_mod.history_repo.set_entry(
+    _repos_mod.history_repo.append_event(
         "tuning dish b", (_date.today() - _timedelta(days=3)).isoformat()
     )
 
@@ -835,6 +845,78 @@ def test_missing_required_arg_message():
     check("missing 'dish_name' reported clearly",
           "error" in res2 and "dish_name" in res2["error"]
           and "required" in res2["error"].lower(), f"got: {res2}")
+
+
+def test_history_event_log_on_disk():
+    print("\n-- register_cooked_meal writes a v2 event log --")
+    from datetime import date as _date, timedelta as _timedelta
+    add_dish({"name": "Log Dish", "ingredients": {"log_a": True}})
+    update_fridge_inventory({"action": "set", "ingredients": {"log_a": 5}})
+
+    register_cooked_meal({"dish_name": "Log Dish"})
+    stored = json.loads((_TMP_DATA_DIR / "history.json").read_text(encoding="utf-8"))
+    check("file uses schema_version 2", stored.get("schema_version") == 2, f"got {stored}")
+    rows = [e for e in stored.get("events", []) if e["dish_name"] == "log dish"]
+    check("exactly one event recorded", len(rows) == 1, f"got {rows}")
+    check("today's cook is not marked backfilled",
+          rows[0]["backfilled"] is False, f"got {rows[0]}")
+    check("recorded_at is timezone-aware",
+          "+" in rows[0]["recorded_at"] or rows[0]["recorded_at"].endswith("Z"),
+          f"got {rows[0]}")
+
+    old = (_date.today() - _timedelta(days=40)).isoformat()
+    register_cooked_meal({"dish_name": "Log Dish", "date": old})
+    stored = json.loads((_TMP_DATA_DIR / "history.json").read_text(encoding="utf-8"))
+    rows = [e for e in stored["events"] if e["dish_name"] == "log dish"]
+    check("backdated cook appends a second event", len(rows) == 2, f"got {rows}")
+    check("backdated cook is marked backfilled",
+          any(e["cooked_on"] == old and e["backfilled"] is True for e in rows),
+          f"got {rows}")
+    check("the older event does not move the projection",
+          _repos_mod.history_repo.load()["log dish"] == _date.today().isoformat(),
+          f"got {_repos_mod.history_repo.load()}")
+
+
+def test_history_rollback_hard_deletes_the_event():
+    print("\n-- register_cooked_meal rollback leaves no trace --")
+    add_dish({"name": "Rollback Dish", "ingredients": {"rb_a": True}})
+    update_fridge_inventory({"action": "set", "ingredients": {"rb_a": 5}})
+    before = len(_repos_mod.history_repo.load_events())
+
+    original_consume = _repos_mod.fridge_repo.consume
+    try:
+        def fail_consume(_names):
+            raise RuntimeError("boom")
+
+        _repos_mod.fridge_repo.consume = fail_consume
+        result = parse(register_cooked_meal({"dish_name": "Rollback Dish"}))
+        check("returns an error envelope", "error" in result, f"got {result}")
+    finally:
+        _repos_mod.fridge_repo.consume = original_consume
+
+    events = _repos_mod.history_repo.load_events()
+    # A rolled-back cook never happened, so it must be hard-deleted rather than
+    # retracted — a retracted row would read as "the user took this back".
+    check("no event for the failed cook remains",
+          not any(e.dish_name == "rollback dish" for e in events),
+          f"got {[e.to_dict() for e in events]}")
+    check("the rest of the log is untouched", len(events) == before, f"got {events}")
+
+
+def test_delete_history_entry_releases_the_cooldown():
+    print("\n-- delete_history_entry releases the recency cooldown --")
+    add_dish({"name": "Cooldown Dish", "ingredients": {"cd_a": True}})
+    update_fridge_inventory({"action": "set", "ingredients": {"cd_a": 5}})
+    register_cooked_meal({"dish_name": "Cooldown Dish"})
+
+    gated = parse(get_meal_suggestions({}))
+    check("a dish cooked today is gated out",
+          not any(s["dish"] == "cooldown dish" for s in gated), f"got {gated}")
+
+    delete_history_entry({"dish_name": "Cooldown Dish"})
+    freed = parse(get_meal_suggestions({}))
+    check("retracting the cook makes it suggestible again",
+          any(s["dish"] == "cooldown dish" for s in freed), f"got {freed}")
 
 
 def test_dish_instructions_roundtrip():
@@ -1230,6 +1312,9 @@ def main():
         # cannot perturb the catalog the earlier assertions depend on.
         test_missing_required_arg_message()
         test_unknown_argument_rejected()
+        test_history_event_log_on_disk()
+        test_history_rollback_hard_deletes_the_event()
+        test_delete_history_entry_releases_the_cooldown()
         test_dish_instructions_roundtrip()
         test_edit_dish_preserves_instructions()
         test_dish_instructions_errors()

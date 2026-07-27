@@ -9,6 +9,7 @@ Usage:
 
 import copy
 import importlib
+import json
 import sys
 from pathlib import Path
 
@@ -26,6 +27,7 @@ _shopping_mod = importlib.import_module(".src.shopping", _PLUGIN_DIR.name)
 _tuning_mod = importlib.import_module(".src.tuning", _PLUGIN_DIR.name)
 _handlers_common = importlib.import_module(".src.handlers._common", _PLUGIN_DIR.name)
 _repos_mod = importlib.import_module(".src.repositories", _PLUGIN_DIR.name)
+_history_event_mod = importlib.import_module(".src.history_event", _PLUGIN_DIR.name)
 reject_unknown_args = _handlers_common.reject_unknown_args
 
 Dish = _dish_mod.Dish
@@ -520,39 +522,217 @@ def test_fridge_repository_non_finite_counts():
         _shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_history_set_entry_only_if_newer():
-    print("\n-- JsonHistoryRepository.set_entry (only_if_newer) --")
+def _history_repo_in_tmp(tmp):
+    return _repos_mod.JsonHistoryRepository(tmp / "history.json")
+
+
+def test_history_projects_latest_per_dish():
+    print("\n-- JsonHistoryRepository.load (projection) --")
     import tempfile
     from pathlib import Path as _Path
     tmp = _Path(tempfile.mkdtemp(prefix="mm_history_"))
     try:
-        repo = _repos_mod.JsonHistoryRepository(tmp / "history.json")
-        repo.set_entry("paella", "2026-07-26")
-
-        previous = repo.set_entry("paella", "2026-06-26", only_if_newer=True)
-        check("older date does not overwrite a newer entry",
-              repo.load()["paella"] == "2026-07-26", f"got {repo.load()}")
-        check("previous value still returned", previous == "2026-07-26")
-
-        repo.set_entry("paella", "2026-08-01", only_if_newer=True)
-        check("newer date does overwrite", repo.load()["paella"] == "2026-08-01")
-
-        # Rollback must stay correct when the write was skipped: the stored
-        # value never matched the expected one, so revert is a no-op.
-        repo.set_entry("stew", "2026-07-26")
-        repo.set_entry("stew", "2026-01-01", only_if_newer=True)
-        reverted = repo.revert_entry("stew", "2026-01-01", None)
-        check("revert of a skipped write is a no-op",
-              reverted is False and repo.load()["stew"] == "2026-07-26",
+        repo = _history_repo_in_tmp(tmp)
+        repo.append_event("paella", "2026-07-26")
+        repo.append_event("stew", "2026-01-05")
+        repo.append_event("paella", "2026-08-01")
+        check("projects the latest date per dish",
+              repo.load() == {"paella": "2026-08-01", "stew": "2026-01-05"},
               f"got {repo.load()}")
+        check("every event is retained",
+              len(repo.load_events()) == 3, f"got {repo.load_events()}")
 
-        # A default (unflagged) write stays destructive — the repository
-        # primitive is unchanged for callers that want last-write-wins.
-        repo.set_entry("stew", "2020-01-01")
-        check("plain set_entry still overwrites", repo.load()["stew"] == "2020-01-01")
+        stored = json.loads((tmp / "history.json").read_text(encoding="utf-8"))
+        check("written in the v2 envelope",
+              stored.get("schema_version") == 2 and len(stored.get("events", [])) == 3,
+              f"got {stored}")
     finally:
         import shutil as _shutil
         _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_history_older_event_cannot_rewind_the_cooldown():
+    print("\n-- JsonHistoryRepository: an older event never wins --")
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_history_"))
+    try:
+        repo = _history_repo_in_tmp(tmp)
+        repo.append_event("paella", "2026-07-26")
+        # This is the bug the old single-value model needed an `only_if_newer`
+        # flag to avoid. Under the log the projection takes the maximum, so
+        # backdating a forgotten meal cannot reset a cook from this morning.
+        repo.append_event("paella", "2026-06-26", backfilled=True)
+        check("backdated event does not move the projection",
+              repo.load()["paella"] == "2026-07-26", f"got {repo.load()}")
+        check("but the backdated event is still on record",
+              any(e.cooked_on == "2026-06-26" and e.backfilled
+                  for e in repo.load_events()),
+              f"got {[e.to_dict() for e in repo.load_events()]}")
+
+        repo.append_event("paella", "2026-09-01")
+        check("a genuinely newer event does move it",
+              repo.load()["paella"] == "2026-09-01", f"got {repo.load()}")
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_history_retract_versus_delete():
+    print("\n-- JsonHistoryRepository: retract vs delete --")
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_history_"))
+    try:
+        repo = _history_repo_in_tmp(tmp)
+        old = repo.append_event("paella", "2026-05-01")
+        recent = repo.append_event("paella", "2026-07-26")
+
+        retracted = repo.retract_latest_for_dish("Paella")
+        check("retracts the most recent cook", retracted.id == recent.id)
+        check("projection falls back to the earlier cook",
+              repo.load()["paella"] == "2026-05-01", f"got {repo.load()}")
+        check("retracted event is still in the log",
+              len(repo.load_events()) == 2, f"got {repo.load_events()}")
+        check("retracted event is marked, not removed",
+              any(e.id == recent.id and not e.active for e in repo.load_events()))
+
+        check("retracting an already-retracted id returns None",
+              repo.retract_event(recent.id) is None)
+        check("retracting an unknown id returns None",
+              repo.retract_event("cook_nope") is None)
+
+        # Hard delete is the rollback path: the row must vanish entirely.
+        check("delete_event reports success", repo.delete_event(old.id) is True)
+        check("deleted event is gone from the log",
+              [e.id for e in repo.load_events()] == [recent.id],
+              f"got {[e.id for e in repo.load_events()]}")
+        check("deleting an unknown id reports failure",
+              repo.delete_event(old.id) is False)
+        check("projection is empty once the last active event is gone",
+              repo.load() == {}, f"got {repo.load()}")
+
+        check("retract_latest_for_dish on an unknown dish returns None",
+              repo.retract_latest_for_dish("nothing here") is None)
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_history_legacy_migration():
+    print("\n-- JsonHistoryRepository: legacy {dish: date} migration --")
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_history_"))
+    try:
+        path = tmp / "history.json"
+        legacy = {"Paella": "2026-07-26", "stew": "2026-01-05", "bad": "nope"}
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        repo = _history_repo_in_tmp(tmp)
+        events = repo.load_events()
+        check("one event per readable entry", len(events) == 2, f"got {events}")
+        check("names normalized",
+              {e.dish_name for e in events} == {"paella", "stew"},
+              f"got {[e.dish_name for e in events]}")
+        check("projection matches the legacy mapping",
+              repo.load() == {"paella": "2026-07-26", "stew": "2026-01-05"},
+              f"got {repo.load()}")
+        check("load_events never writes", json.loads(path.read_text()) == legacy)
+
+        # Ids must be a pure function of the entry: migration re-runs in memory
+        # on every load until the first write, and a random id would duplicate
+        # the row the moment something did write.
+        second = _history_repo_in_tmp(tmp).load_events()
+        check("ids are deterministic across migrations",
+              sorted(e.id for e in events) == sorted(e.id for e in second),
+              f"{sorted(e.id for e in events)} vs {sorted(e.id for e in second)}")
+
+        repo.append_event("paella", "2026-08-02")
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        check("the next write persists the v2 shape",
+              stored.get("schema_version") == 2 and len(stored["events"]) == 3,
+              f"got {stored}")
+        check("no duplicates after the rewrite",
+              len({e["id"] for e in stored["events"]}) == 3, f"got {stored}")
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_history_corruption():
+    print("\n-- JsonHistoryRepository: corrupt storage --")
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_history_"))
+    try:
+        path = tmp / "history.json"
+        repo = _history_repo_in_tmp(tmp)
+
+        for label, content in (
+            ("invalid JSON", "{not json"),
+            ("top-level list", "[1, 2, 3]"),
+            ("unsupported schema_version", '{"schema_version": 99, "events": []}'),
+            ("non-list events", '{"schema_version": 2, "events": {}}'),
+            ("invalid event row", '{"schema_version": 2, "events": [{"id": "x"}]}'),
+        ):
+            path.write_text(content, encoding="utf-8")
+            check(f"{label}: non-strict yields an empty log",
+                  repo.load_events() == [], f"got {repo.load_events()}")
+            try:
+                repo.load_events(strict=True)
+                check(f"{label}: strict raises", False, "no exception")
+            except _repos_mod.HistoryDataError:
+                check(f"{label}: strict raises HistoryDataError", True)
+
+        check("load() tolerates corruption", repo.load() == {})
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_cooking_event_from_dict_strict():
+    print("\n-- CookingEvent.from_dict (strict) --")
+    complete = {
+        "id": "cook_abc",
+        "dish_name": "Paella",
+        "cooked_on": "2026-07-26",
+        "recorded_at": "2026-07-26T10:00:00+00:00",
+        "backfilled": False,
+        "retracted_at": None,
+    }
+    event = _history_event_mod.CookingEvent.from_dict(complete)
+    check("round-trips", event.to_dict()["dish_name"] == "paella", f"got {event}")
+    check("active when not retracted", event.active is True)
+
+    missing = {k: v for k, v in complete.items() if k != "recorded_at"}
+    try:
+        _history_event_mod.CookingEvent.from_dict(missing)
+        check("missing key raises", False, "no exception")
+    except ValueError as exc:
+        check("missing key raises ValueError naming it",
+              "recorded_at" in str(exc), str(exc))
+
+    try:
+        _history_event_mod.CookingEvent.from_dict({**complete, "portions": 2})
+        check("unknown key raises", False, "no exception")
+    except ValueError as exc:
+        check("unknown key raises ValueError naming it",
+              "portions" in str(exc), str(exc))
+
+    for label, override in (
+        ("bad id prefix", {"id": "evt_abc"}),
+        ("blank dish name", {"dish_name": "   "}),
+        ("bad cooked_on", {"cooked_on": "26-07-2026"}),
+        ("naive recorded_at", {"recorded_at": "2026-07-26T10:00:00"}),
+        ("non-bool backfilled", {"backfilled": "yes"}),
+        ("naive retracted_at", {"retracted_at": "2026-07-26T10:00:00"}),
+    ):
+        try:
+            _history_event_mod.CookingEvent.from_dict({**complete, **override})
+            check(f"{label} raises", False, "no exception")
+        except ValueError:
+            check(f"{label} raises ValueError", True)
 
 
 # ---------------------------------------------------------------------------
@@ -1061,7 +1241,13 @@ def main():
 
     test_fridge_repository_counts()
     test_fridge_repository_non_finite_counts()
-    test_history_set_entry_only_if_newer()
+
+    test_cooking_event_from_dict_strict()
+    test_history_projects_latest_per_dish()
+    test_history_older_event_cannot_rewind_the_cooldown()
+    test_history_retract_versus_delete()
+    test_history_legacy_migration()
+    test_history_corruption()
 
     test_normalize_ingredients_dict()
     test_normalize_ingredients_list()

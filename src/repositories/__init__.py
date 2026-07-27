@@ -28,7 +28,7 @@ from .base import (
 )
 from .json_dish import JsonDishRepository
 from .json_fridge import JsonFridgeRepository
-from .json_history import JsonHistoryRepository
+from .json_history import HistoryDataError, JsonHistoryRepository
 from .json_tuning import JsonTuningRepository
 
 # ---------------------------------------------------------------------------
@@ -68,6 +68,7 @@ def configure(data_dir) -> None:
 __all__ = [
     "DishRepository",
     "FridgeRepository",
+    "HistoryDataError",
     "HistoryRepository",
     "TuningRepository",
     "JsonDishRepository",

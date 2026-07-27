@@ -17,15 +17,6 @@ logger = logging.getLogger(__name__)
 NAME = "register_cooked_meal"
 
 
-def _kept_newer_entry(previous: str | None, cooked_iso: str) -> bool:
-    """True when a more recent history entry was preserved instead of overwritten."""
-    if previous is None:
-        return False
-    try:
-        return date.fromisoformat(previous) > date.fromisoformat(cooked_iso)
-    except (TypeError, ValueError):
-        return False
-
 SCHEMA = {
     "description": (
         "Register that a specific dish was cooked. Records it in the cooking "
@@ -86,11 +77,13 @@ def HANDLER(args: dict, **kwargs):
         backdated = cooked_on != date.today()
     cooked_iso = cooked_on.isoformat()
 
-    # History holds one date per dish. Recording a forgotten meal from last month
-    # must not overwrite a cook from this morning — that would hand the dish back
-    # to the suggestion engine while it is still inside its cooldown window.
-    previous_history = history_repo.set_entry(name, cooked_iso, only_if_newer=True)
-    superseded = _kept_newer_entry(previous_history, cooked_iso)
+    # Read the projection before appending: this is what the response compares
+    # against to tell the user whether their cooldown actually moved.
+    projected_before = history_repo.load().get(name)
+    event = history_repo.append_event(name, cooked_iso, backfilled=backdated)
+    superseded = projected_before is not None and (
+        date.fromisoformat(projected_before) > cooked_on
+    )
 
     essentials = [ing for ing, is_essential in dish.ingredients.items() if is_essential]
 
@@ -98,7 +91,9 @@ def HANDLER(args: dict, **kwargs):
         consumed = fridge_repo.consume(essentials)
     except Exception:
         try:
-            history_repo.revert_entry(name, cooked_iso, previous_history)
+            # Hard delete, not a retraction: a cook that was rolled back never
+            # happened, so it must leave no trace in the log.
+            history_repo.delete_event(event.id)
         except Exception:
             logger.exception("register_cooked_meal rollback failed")
         raise
@@ -133,8 +128,10 @@ def HANDLER(args: dict, **kwargs):
         removed_msg = ""
 
     if superseded:
+        # The event was still recorded — the log keeps everything. What is
+        # unchanged is the projection, and with it the cooldown.
         history_msg = (
-            f" Cooking history still shows {previous_history}, which is more recent,"
+            f" Cooking history still shows {projected_before}, which is more recent,"
             " so the recency cooldown is unchanged."
         )
     else:
