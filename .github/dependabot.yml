@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # This repository declares no dependency manifest — no pyproject.toml, requirements.txt,
+  # or package.json — so GitHub Actions is the only ecosystem Dependabot can track. Add a
+  # pip block here if a manifest is introduced later.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
