@@ -29,6 +29,8 @@ _tuning_mod = importlib.import_module(".src.tuning", _PLUGIN_DIR.name)
 _handlers_common = importlib.import_module(".src.handlers._common", _PLUGIN_DIR.name)
 _repos_mod = importlib.import_module(".src.repositories", _PLUGIN_DIR.name)
 _history_event_mod = importlib.import_module(".src.history_event", _PLUGIN_DIR.name)
+_filelock_mod = importlib.import_module(".src.filelock", _PLUGIN_DIR.name)
+_src_mod = importlib.import_module(".src", _PLUGIN_DIR.name)
 reject_unknown_args = _handlers_common.reject_unknown_args
 
 Dish = _dish_mod.Dish
@@ -1575,6 +1577,154 @@ def test_tuning_compute_rewards_no_signal():
     check("normal cook produces rewards", isinstance(rewards2, dict) and len(rewards2) > 0)
 
 
+# ---------------------------------------------------------------------------
+# DataDirLock tests
+# ---------------------------------------------------------------------------
+
+
+def _lock_in_tmp(tmp):
+    return _filelock_mod.DataDirLock(tmp / ".lock")
+
+
+def test_data_lock_is_reentrant():
+    print("\n-- DataDirLock (reentrancy) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_lock_"))
+    try:
+        lock = _lock_in_tmp(tmp)
+        check("starts unheld", lock._depth == 0)
+        # Repository methods nest (save -> load_entries) and every repository
+        # shares this one object, so a non-reentrant lock would deadlock here.
+        with lock:
+            check("depth 1 after first acquire", lock._depth == 1)
+            with lock:
+                check("depth 2 after nested acquire", lock._depth == 2)
+                with lock:
+                    check("depth 3 after third acquire", lock._depth == 3)
+                check("depth unwinds to 2", lock._depth == 2)
+            check("depth unwinds to 1", lock._depth == 1)
+        check("depth unwinds to 0", lock._depth == 0)
+        check("file descriptor released", lock._fd is None)
+        check("lock file was created", (tmp / ".lock").exists())
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_data_lock_configure_rejects_while_held():
+    print("\n-- DataDirLock (configure while held) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_lock_"))
+    try:
+        lock = _lock_in_tmp(tmp)
+        with lock:
+            try:
+                lock.configure(tmp / "other.lock")
+                check("configure while held rejected", False, "no exception")
+            except RuntimeError:
+                check("configure while held rejected", True)
+            check("path unchanged after refusal", lock.path == tmp / ".lock")
+        lock.configure(tmp / "other.lock")
+        check("configure works once released", lock.path == tmp / "other.lock")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_data_lock_releases_on_exception():
+    print("\n-- DataDirLock (release on exception) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_lock_"))
+    try:
+        lock = _lock_in_tmp(tmp)
+        try:
+            with lock:
+                raise RuntimeError("boom")
+        except RuntimeError:
+            pass
+        check("depth back to 0 after an exception", lock._depth == 0)
+        check("fd released after an exception", lock._fd is None)
+        with lock:
+            check("a fresh acquisition still succeeds", lock._depth == 1)
+        check("and unwinds again", lock._depth == 0)
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+_CHILD_PROBE = """
+import fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o644)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    print("REFUSED")
+else:
+    print("ACQUIRED")
+"""
+
+
+def test_data_lock_excludes_another_process():
+    print("\n-- DataDirLock (cross-process exclusion) --")
+    if _filelock_mod.fcntl is None:
+        print("  SKIP  fcntl unavailable on this platform")
+        return
+    import shutil as _shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_lock_"))
+    try:
+        lock = _lock_in_tmp(tmp)
+        path = str(tmp / ".lock")
+
+        def probe():
+            # Non-blocking acquisition in the child, so it answers immediately
+            # and the test never has to sleep to coordinate.
+            done = subprocess.run(
+                [sys.executable, "-c", _CHILD_PROBE, path],
+                capture_output=True, text=True, timeout=30,
+            )
+            return done.stdout.strip()
+
+        with lock:
+            check("another process is refused while we hold it",
+                  probe() == "REFUSED", "child was not blocked")
+        check("another process acquires it once released",
+              probe() == "ACQUIRED", "child could not acquire after release")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_repositories_share_one_lock():
+    print("\n-- DataDirLock (shared across repositories) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    shared = _filelock_mod.data_lock
+    check("dish and fridge share one lock object",
+          _repos_mod.dish_repo.lock is _repos_mod.fridge_repo.lock)
+    check("tuning shares it too", _repos_mod.tuning_repo.lock is shared)
+    check("alias shares it too", _repos_mod.alias_repo.lock is shared)
+    check("history shares it too", _repos_mod.history_repo._lock is shared)
+
+    # configure() redirects the singletons globally, so put the paths back.
+    previous = _repos_mod.dish_repo.path.parent
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_lock_cfg_"))
+    try:
+        _repos_mod.configure(tmp)
+        check("configure moves the lock into the new data dir",
+              shared.path == tmp / ".lock", f"got {shared.path}")
+    finally:
+        _repos_mod.configure(previous)
+        _shutil.rmtree(tmp, ignore_errors=True)
+    check("configure restores the previous lock path",
+          shared.path == previous / ".lock", f"got {shared.path}")
+
+
 def main():
     run(test_dish_normalize_ingredient)
     run(test_dish_normalize_name)
@@ -1620,6 +1770,13 @@ def main():
     run(test_normalize_ingredient_entries)
 
     run(test_alias_repository)
+
+    # -- DataDirLock --
+    run(test_data_lock_is_reentrant)
+    run(test_data_lock_configure_rejects_while_held)
+    run(test_data_lock_releases_on_exception)
+    run(test_data_lock_excludes_another_process)
+    run(test_repositories_share_one_lock)
 
     run(test_cooking_event_from_dict_strict)
     run(test_history_projects_latest_per_dish)

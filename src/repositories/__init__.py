@@ -20,6 +20,7 @@ module that already imported ``dish_repo`` / ``fridge_repo`` / ``history_repo``
 
 from pathlib import Path
 
+from .. import data_lock
 from .base import (
     AliasRepository,
     DishRepository,
@@ -60,6 +61,11 @@ def configure(data_dir) -> None:
     * the top-level ``register(ctx, data_dir=…)`` when a Hermes host wants
       the plugin to read/write under a custom location;
     * tests pointing at a ``tempfile.mkdtemp()`` path for isolation.
+
+    The cross-process lock file moves with the data directory: every
+    repository shares the one ``data_lock``, so redirecting it here is what
+    keeps a test run on a ``mkdtemp()`` path from contending with the real
+    ``data/``.
     """
     data_dir = Path(data_dir)
     dish_repo.path = data_dir / "dishes.json"
@@ -67,6 +73,7 @@ def configure(data_dir) -> None:
     history_repo.path = data_dir / "history.json"
     tuning_repo.path = data_dir / "tuning.json"
     alias_repo.path = data_dir / "aliases.json"
+    data_lock.configure(data_dir / ".lock")
 
 
 __all__ = [

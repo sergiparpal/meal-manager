@@ -13,12 +13,11 @@ from this morning — the bug the old single-value model needed an
 
 import json
 import logging
-import threading
 import uuid
 from datetime import date
 from pathlib import Path
 
-from .. import atomic_write_json
+from .. import atomic_write_json, data_lock
 from ..dish import Dish
 from ..history_event import CookingEvent, new_event_id, utc_now_iso
 
@@ -45,7 +44,8 @@ class JsonHistoryRepository:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        self._lock = threading.Lock()
+        # Shared with every other repository — see ``src/filelock.py``.
+        self._lock = data_lock
 
     # -- reading ------------------------------------------------------------
 

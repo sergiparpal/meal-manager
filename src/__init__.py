@@ -5,6 +5,10 @@ import os
 import tempfile
 from pathlib import Path
 
+from .filelock import DataDirLock, data_lock
+
+__all__ = ["DataDirLock", "atomic_write_json", "data_lock"]
+
 
 def atomic_write_json(path: Path, data, *, indent: int | None = 2,
                       fsync_dir: bool = True) -> None:
