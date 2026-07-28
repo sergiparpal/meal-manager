@@ -10,7 +10,9 @@ Usage:
 import copy
 import importlib
 import json
+import shutil
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 
@@ -1833,7 +1835,7 @@ def test_repositories_share_one_lock():
           shared.path == previous / ".lock", f"got {shared.path}")
 
 
-def main():
+def _run_all():
     run(test_dish_normalize_ingredient)
     run(test_dish_normalize_name)
     run(test_dish_can_cook_with)
@@ -1934,6 +1936,22 @@ def main():
     run(test_alias_repository_cache_invalidation)
     run(test_tuning_deployed_weight_off_grid)
     run(test_tuning_reward_denominator_uses_ranking_size)
+
+
+def main():
+    # Every repository shares one lock object, and its path is global state: a
+    # repository constructed against a tmp path still locks whatever data_lock
+    # currently points at. Without this redirect the tests that build their own
+    # repositories would create and flock <plugin_root>/data/.lock — and
+    # AGENTS.md is explicit that tests never touch the real data/.
+    original_data_dir = _repos_mod.dish_repo.path.parent
+    run_tmp = Path(tempfile.mkdtemp(prefix="mm_unit_"))
+    _repos_mod.configure(run_tmp)
+    try:
+        _run_all()
+    finally:
+        _repos_mod.configure(original_data_dir)
+        shutil.rmtree(run_tmp, ignore_errors=True)
 
     print(f"\n{'='*40}")
     print(f"  {_passed} passed, {_failed} failed")
