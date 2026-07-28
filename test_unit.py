@@ -543,7 +543,8 @@ def test_fridge_repository_non_finite_counts():
 
 def test_expiry_status():
     print("\n-- expiry_status --")
-    from datetime import date as _date, timedelta as _timedelta
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
     _json_fridge = importlib.import_module(".src.repositories.json_fridge",
                                            _PLUGIN_DIR.name)
     status = _json_fridge.expiry_status

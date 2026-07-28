@@ -90,9 +90,13 @@ def _canonical_ingredients(ingredients, is_essential) -> list[str]:
 
 
 def _build_ranked(ingredients, is_essential):
+    # The real guarantee is the length check in _canonical_ingredients above,
+    # the only path that reaches here. strict=True is defense in depth: if a
+    # future caller arrives without that check, a silent truncation becomes a
+    # raised error.
     return [
         {"ingredient": ing, "is_essential": ess}
-        for ing, ess in zip(ingredients, is_essential)
+        for ing, ess in zip(ingredients, is_essential, strict=True)
     ]
 
 

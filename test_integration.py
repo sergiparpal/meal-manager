@@ -290,7 +290,8 @@ def test_cook_decrements_instead_of_deleting():
 
 def test_register_cooked_meal_backdated():
     print("\n-- register_cooked_meal (backdated) --")
-    from datetime import date as _date, timedelta as _timedelta
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
     add_dish({"name": "Backdate Dish", "ingredients": {"bd_a": True}})
     update_fridge_inventory({"action": "set", "ingredients": {"bd_a": 2}})
 
@@ -313,7 +314,8 @@ def test_register_cooked_meal_backdated():
 
 def test_register_cooked_meal_backdate_preserves_newer():
     print("\n-- register_cooked_meal (backdating keeps the newer entry) --")
-    from datetime import date as _date, timedelta as _timedelta
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
     add_dish({"name": "Paella Reciente", "ingredients": {"pr_a": True}})
     update_fridge_inventory({"action": "set", "ingredients": {"pr_a": 10}})
 
@@ -813,7 +815,8 @@ def test_dii_add_manual_empty():
 
 def test_online_weight_tuning():
     print("\n-- online weight tuning --")
-    from datetime import date as _date, timedelta as _timedelta
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
 
     # Give the two dishes opposing profiles so the ranking depends on w and the
     # cook produces a real (non-skipped) learning event: A is well-rested but has
@@ -875,7 +878,8 @@ def test_missing_required_arg_message():
 
 def test_history_event_log_on_disk():
     print("\n-- register_cooked_meal writes a v2 event log --")
-    from datetime import date as _date, timedelta as _timedelta
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
     add_dish({"name": "Log Dish", "ingredients": {"log_a": True}})
     update_fridge_inventory({"action": "set", "ingredients": {"log_a": 5}})
 
@@ -1031,7 +1035,8 @@ def test_list_cooking_history_surfaces_corruption():
 
 def test_fridge_expiry_end_to_end():
     print("\n-- update_fridge_inventory / list_fridge (expiry) --")
-    from datetime import date as _date, timedelta as _timedelta
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
     soon = (_date.today() + _timedelta(days=2)).isoformat()
     stale = (_date.today() - _timedelta(days=2)).isoformat()
     later = (_date.today() + _timedelta(days=60)).isoformat()
