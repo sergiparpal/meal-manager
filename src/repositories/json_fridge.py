@@ -110,9 +110,14 @@ class JsonFridgeRepository:
         if not self.path.exists():
             return {}
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
-        except (json.JSONDecodeError, ValueError) as exc:
+        except (json.JSONDecodeError, ValueError, OSError) as exc:
+            # OSError belongs here with the parse errors. Without it, a
+            # permissions glitch on fridge.json took down every fridge-backed
+            # tool with an error envelope, while the identical glitch on
+            # dishes.json, aliases.json, history.json or tuning.json degraded
+            # quietly — the one file in the set that hard-failed.
             logger.warning("Failed to load %s: %s", self.path.name, exc)
             return {}
 
@@ -199,7 +204,7 @@ class JsonFridgeRepository:
 
         The read and the write are one load-modify-save window, so they belong
         inside the lock. It is reentrant, so callers that already hold it
-        (``remove_items``, ``consume``, ``restore_counts``) are unaffected.
+        (``remove_items``, ``consume``) are unaffected.
         """
         with self.lock:
             known = self.load_entries()
@@ -230,8 +235,12 @@ class JsonFridgeRepository:
         """Consume one portion of each name present and available.
 
         Returns ``{name: previous_count}`` for the entries actually changed, so
-        the caller can roll back with :meth:`restore_counts`. Staples and
-        already-zero entries are not changed and are not reported.
+        the caller can report what moved. Staples and already-zero entries are
+        not changed and are not reported.
+
+        The whole decrement lands in one locked load-modify-save, so there is
+        no half-applied state for a caller to compensate for — which is why
+        this has no rollback counterpart.
         """
         if not names:
             return {}
@@ -250,14 +259,3 @@ class JsonFridgeRepository:
             if previous:
                 self.save_entries(entries)
             return previous
-
-    def restore_counts(self, previous: dict) -> None:
-        """Re-apply counts captured by :meth:`consume` (rollback path)."""
-        if not previous:
-            return
-        with self.lock:
-            entries = self.load_entries()
-            for name, count in previous.items():
-                entry = entries.setdefault(name, {"count": count, "expires_on": None})
-                entry["count"] = count
-            self.save_entries(entries)

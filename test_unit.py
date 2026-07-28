@@ -461,7 +461,7 @@ def test_suggest_quick_shopping_prefers_cheapest_basket():
 
 
 def test_suggest_quick_shopping_score_matches_cheapest_unlock():
-    print("\n-- suggest_quick_shopping (score describes the cheapest unlock) --")
+    print("\n-- suggest_quick_shopping (row describes the cheapest unlock) --")
     # 'x' unlocks 'near' on its own (score 0.4) and 'far' as part of a 3-item
     # basket (score 1.0). Reporting 1.0 next to still_missing=1 would promise a
     # meal that basket cannot buy.
@@ -475,7 +475,18 @@ def test_suggest_quick_shopping_score_matches_cheapest_unlock():
     check("still_missing is the smallest basket", row[4] == 1, f"got {row}")
     check("score belongs to that basket's dish, not the pricier one",
           abs(row[2] - 0.4) < 1e-9, f"got {row}")
-    check("reach still counts every dish naming it", row[3] == 2, f"got {row}")
+    # Reach is scoped to the reported basket too. Counting every dish that
+    # merely names the ingredient made the row read "buy this one thing,
+    # unlocks 2 dishes" while the single purchase unlocked one — the same
+    # promise the score fix above exists to prevent, one field over.
+    check("reach counts only what this basket reaches", row[3] == 1, f"got {row}")
+    check("the pricier dish is not advertised here",
+          row[1] == "near", f"got {row}")
+    # 'far' is still reachable — through the ingredients its own basket needs,
+    # at that basket's true size.
+    far_row = next(r for r in result if r[0] == "p")
+    check("pricier dish still surfaces at its real basket size",
+          far_row[1] == "far" and far_row[4] == 3, f"got {far_row}")
 
 
 def test_suggest_quick_shopping_ranks_by_reach():
@@ -514,9 +525,6 @@ def test_fridge_repository_counts():
         check("onion decremented", repo.load()["onion"] == 1)
         check("staple untouched", repo.load()["salt"] is None)
         check("zero stays zero", repo.load()["gone"] == 0)
-
-        repo.restore_counts(previous)
-        check("restore_counts rolls back", repo.load()["onion"] == 2)
     finally:
         import shutil as _shutil
         _shutil.rmtree(tmp, ignore_errors=True)
@@ -654,11 +662,6 @@ def test_fridge_mutations_preserve_expiry():
         repo.consume(["milk"])
         check("consume decrements without losing the date",
               repo.load_entries()["milk"] == {"count": 1, "expires_on": "2026-08-01"},
-              f"got {repo.load_entries()}")
-
-        repo.restore_counts({"milk": 2})
-        check("restore_counts keeps the date",
-              repo.load_entries()["milk"] == {"count": 2, "expires_on": "2026-08-01"},
               f"got {repo.load_entries()}")
 
         repo.save({"milk": 5, "salt": None})
@@ -1557,6 +1560,42 @@ def test_tuning_validate_state_corruption_branches():
               tuning.validate_state(poisoned)["observations"] == 0)
 
 
+def test_tuning_validate_state_rejects_unusable_candidates():
+    print("\n-- tuning.validate_state (candidate list must be usable) --")
+    # Every candidate is arithmetic input further down: select_deployed compares
+    # it against BAND and compute_rewards blends with it. Checking the candidate
+    # set by *filtering* non-numeric entries let a list that merely contained
+    # the right values validate; the junk then raised TypeError inside
+    # select_deployed, which register_cooked_meal swallows — so the learner
+    # froze permanently with nothing but a log line to show for it.
+    for label, bad in (
+        ("a string", "junk"),
+        ("None", None),
+        ("a nested list", [0.5]),
+        ("a bool", True),
+        ("NaN", float("nan")),
+    ):
+        polluted = copy.deepcopy(tuning.initialize_state())
+        polluted["candidates"] = [*tuning.CANDIDATES, bad]
+        polluted["observations"] = 50
+        restored = tuning.validate_state(polluted)
+        check(f"rejects a candidate list containing {label}",
+              restored["observations"] == 0, f"got {restored['candidates']}")
+        # The whole point: whatever comes back must survive the real consumers.
+        tuning.select_deployed(restored)
+
+    duplicated = copy.deepcopy(tuning.initialize_state())
+    duplicated["candidates"] = [*tuning.CANDIDATES, tuning.CANDIDATES[0]]
+    duplicated["observations"] = 50
+    check("rejects a duplicated candidate (a set comparison hid it)",
+          tuning.validate_state(duplicated)["observations"] == 0)
+
+    good = copy.deepcopy(tuning.initialize_state())
+    good["observations"] = 50
+    check("an intact candidate list still validates",
+          tuning.validate_state(good) is good)
+
+
 def test_tuning_compute_rewards_no_signal():
     print("\n-- tuning.compute_rewards (no-signal cook returns None) --")
     a = Dish(name="rice bowl", ingredients={"rice": True})
@@ -1872,6 +1911,7 @@ def _run_all():
     run(test_suggest_quick_shopping_score_matches_cheapest_unlock)
 
     run(test_fridge_repository_counts)
+    run(test_fridge_unreadable_file_degrades_quietly)
     run(test_fridge_repository_non_finite_counts)
 
     run(test_expiry_status)
@@ -1885,6 +1925,10 @@ def _run_all():
     run(test_dish_repo_restore_is_a_noop_when_present)
 
     run(test_atomic_write_json_cleans_up_on_failure)
+    run(test_atomic_write_preserves_file_mode)
+    run(test_atomic_write_sweeps_stale_temps)
+    run(test_dii_session_from_dict_validates)
+    run(test_dii_finalizer_essential_wins)
     run(test_atomic_write_json_replaces_existing)
 
     # -- DataDirLock --
@@ -1921,6 +1965,7 @@ def _run_all():
     run(test_tuning_deployed_weights_clamps_out_of_band)
     run(test_tuning_validate_state)
     run(test_tuning_validate_state_corruption_branches)
+    run(test_tuning_validate_state_rejects_unusable_candidates)
     run(test_tuning_compute_rewards_not_cookable)
     run(test_tuning_compute_rewards_single_dish)
     run(test_tuning_compute_rewards_top_rank)
@@ -1936,6 +1981,176 @@ def _run_all():
     run(test_alias_repository_cache_invalidation)
     run(test_tuning_deployed_weight_off_grid)
     run(test_tuning_reward_denominator_uses_ranking_size)
+
+
+def test_fridge_unreadable_file_degrades_quietly():
+    print("\n-- JsonFridgeRepository (unreadable file degrades) --")
+    import os
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_fridge_"))
+    try:
+        path = tmp / "fridge.json"
+        repo = _repos_mod.JsonFridgeRepository(path)
+        repo.save({"onion": 2})
+        os.chmod(path, 0o000)
+        if os.access(path, os.R_OK):  # running as root — the probe is meaningless
+            print("  SKIP  unreadable-file probe (running with override access)")
+            return
+        # An OSError used to escape load_entries, making fridge.json the only
+        # data file whose permissions glitch produced an error envelope while
+        # dishes/history/aliases/tuning all degraded to empty.
+        check("unreadable fridge loads as empty, not an exception",
+              repo.load_entries() == {} and repo.load() == {})
+        check("load_set degrades too", repo.load_set() == set())
+    finally:
+        import contextlib as _contextlib
+        import shutil as _shutil
+        with _contextlib.suppress(OSError):
+            os.chmod(tmp / "fridge.json", 0o644)
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_atomic_write_preserves_file_mode():
+    print("\n-- atomic_write_json (keeps the target's permissions) --")
+    import os
+    import stat as _stat
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_atomic_"))
+    try:
+        path = tmp / "data.json"
+        path.write_text("{}")
+        os.chmod(path, 0o644)
+        _src_mod.atomic_write_json(path, {"a": 1})
+        # mkstemp creates 0600 and os.replace carries that onto the target, so
+        # every write through here used to silently narrow the file.
+        check("existing mode survives the replace",
+              _stat.S_IMODE(path.stat().st_mode) == 0o644,
+              f"got {oct(_stat.S_IMODE(path.stat().st_mode))}")
+
+        fresh = tmp / "fresh.json"
+        _src_mod.atomic_write_json(fresh, {"b": 2})
+        check("a brand-new file is not owner-only",
+              _stat.S_IMODE(fresh.stat().st_mode) == 0o644,
+              f"got {oct(_stat.S_IMODE(fresh.stat().st_mode))}")
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_atomic_write_sweeps_stale_temps():
+    print("\n-- atomic_write_json (sweeps orphaned temp files) --")
+    import os
+    import tempfile
+    import time as _time
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_atomic_"))
+    try:
+        # A write killed between mkstemp and os.replace leaves this behind, and
+        # nothing else ever scans the data directory.
+        stale = tmp / f"{_src_mod._TMP_PREFIX}dead{_src_mod._TMP_SUFFIX}"
+        stale.write_text("{}")
+        old = _time.time() - _src_mod._STALE_TMP_SECONDS - 60
+        os.utime(stale, (old, old))
+
+        fresh = tmp / f"{_src_mod._TMP_PREFIX}live{_src_mod._TMP_SUFFIX}"
+        fresh.write_text("{}")
+
+        unrelated = tmp / "notours.tmp"
+        unrelated.write_text("{}")
+
+        _src_mod.atomic_write_json(tmp / "data.json", {"a": 1})
+
+        check("stale temp file is removed", not stale.exists())
+        check("a temp file that could still be in flight is left alone",
+              fresh.exists())
+        check("temp files this module did not create are never touched",
+              unrelated.exists())
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_dii_session_from_dict_validates():
+    print("\n-- dii.session.from_dict (validates a restored backup) --")
+    _session_mod = importlib.import_module(".src.dii.session", _PLUGIN_DIR.name)
+    base = {
+        "session_id": "abc123",
+        "dish_name": "Stew",
+        "essential_ingredients": ["beef"],
+        "optional_ingredients": [],
+        "hidden_queue": [],
+        "current_suggestion": None,
+        "created_at": "2026-07-28T00:00:00+00:00",
+        "last_activity": "2026-07-28T00:00:00+00:00",
+        "finalized": False,
+        "pending_recalculation": False,
+    }
+    ok = _session_mod.from_dict(base)
+    check("a well-formed backup round-trips", ok.essential_ingredients == ["beef"])
+    check("dish name is normalized on restore", ok.dish_name == "stew")
+
+    # The lists are mutually exclusive by design. A backup carrying a name in
+    # both used to reach the finalizer, whose map union resolved the collision
+    # as optional — demoting an essential and letting can_cook_with approve a
+    # dish the user cannot make.
+    both = {**base, "optional_ingredients": ["beef", "thyme"]}
+    resolved = _session_mod.from_dict(both)
+    check("essential wins when a backup lists a name in both",
+          resolved.essential_ingredients == ["beef"]
+          and resolved.optional_ingredients == ["thyme"],
+          f"got {resolved.essential_ingredients} / {resolved.optional_ingredients}")
+
+    # The engine indexes item["ingredient"] directly; a queue entry without it
+    # surfaced to the user as {"error": "'ingredient'"}.
+    for label, bad in (
+        ("a queue entry with no 'ingredient'", {"hidden_queue": [{"is_essential": True}]}),
+        ("a non-object queue entry", {"hidden_queue": ["beef"]}),
+        ("a non-bool is_essential", {"hidden_queue": [{"ingredient": "x", "is_essential": 1}]}),
+        ("a malformed current_suggestion", {"current_suggestion": {"nope": 1}}),
+        ("a non-list ingredient field", {"essential_ingredients": "beef"}),
+        ("a non-string ingredient", {"essential_ingredients": [7]}),
+        ("a non-bool finalized", {"finalized": "yes"}),
+    ):
+        try:
+            _session_mod.from_dict({**base, **bad})
+            check(f"rejects {label}", False, "no error raised")
+        except (KeyError, TypeError, ValueError):
+            # The store treats any of these as a corrupt backup and unlinks it.
+            check(f"rejects {label}", True)
+
+
+def test_dii_finalizer_essential_wins():
+    print("\n-- dii.finalizer (essential wins over optional) --")
+    import tempfile
+    from pathlib import Path as _Path
+    _session_mod = importlib.import_module(".src.dii.session", _PLUGIN_DIR.name)
+    _finalizer_mod = importlib.import_module(".src.dii.finalizer", _PLUGIN_DIR.name)
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_final_"))
+    try:
+        dish_repo = _repos_mod.JsonDishRepository(tmp / "dishes.json")
+        fridge_repo = _repos_mod.JsonFridgeRepository(tmp / "fridge.json")
+        session = _session_mod.DIISession(
+            session_id="s1",
+            dish_name="stew",
+            essential_ingredients=["beef"],
+            optional_ingredients=["beef", "thyme"],
+        )
+        _finalizer_mod.commit(
+            session,
+            commit_to_fridge=False,
+            commit_to_dish=True,
+            dish_repo=dish_repo,
+            fridge_repo=fridge_repo,
+        )
+        stored = dish_repo.load()[0]
+        check("a name in both lists commits as essential",
+              stored.ingredients == {"beef": True, "thyme": False},
+              f"got {stored.ingredients}")
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main():

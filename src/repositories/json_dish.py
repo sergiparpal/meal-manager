@@ -33,7 +33,7 @@ class JsonDishRepository:
         if not self.path.exists():
             return [], []
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
         except (json.JSONDecodeError, ValueError, OSError) as exc:
             logger.warning("Failed to load %s: %s", self.path.name, exc)
@@ -90,6 +90,13 @@ class JsonDishRepository:
         # Every caller does load-modify-save under ``self.lock``, so the rows the
         # preceding load rejected are still what is on disk. Fall back to a fresh
         # read only if this instance has not parsed the file yet.
+        #
+        # Lock-free readers (``get_dish_recipe`` and friends) also refresh this
+        # attribute by calling ``load``. That is safe, and not by accident: only
+        # lock holders write, and the lock is cross-process, so the file cannot
+        # change while a writer holds it — every concurrent reader can only set
+        # this to the same value the writer already read. Splitting the lock, or
+        # letting anything write without holding it, breaks that argument.
         known = self._malformed if self._malformed is not None else self._parse()[1]
         preserved = [
             entry for entry in known

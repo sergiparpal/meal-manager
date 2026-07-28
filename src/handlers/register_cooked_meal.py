@@ -3,7 +3,7 @@
 import logging
 from datetime import date
 
-from .. import tuning
+from .. import data_lock, tuning
 from ..repositories import dish_repo, fridge_repo, history_repo, tuning_repo
 from ._common import (
     days_since_last_cook,
@@ -48,20 +48,9 @@ def HANDLER(args: dict, **kwargs):
     raw_name = require_arg(args, "dish_name")
     name = normalize_dish_name(raw_name)
 
-    with dish_repo.lock:
-        dishes = dish_repo.load()
-        dish = next((d for d in dishes if d.name == name), None)
-
-    if dish is None:
-        raise LookupError(f"'{raw_name}' is not in the recipe catalog.")
-
-    # Snapshot the decision state as it was at the moment the user chose to
-    # cook — before history and fridge are mutated below. The learning update
-    # at the end of the handler replays the ranking against this snapshot.
-    fridge_snapshot = fridge_repo.load_set()
-    days_snapshot = days_since_last_cook()
-
-    raw_date = args.get("date") if isinstance(args, dict) else None
+    # Validate the date before entering the lock window — it needs no stored
+    # state, and a rejected argument should not queue behind another process.
+    raw_date = args.get("date")
     if raw_date is None:
         cooked_on = date.today()
         backdated = False
@@ -77,36 +66,57 @@ def HANDLER(args: dict, **kwargs):
         backdated = cooked_on != date.today()
     cooked_iso = cooked_on.isoformat()
 
-    # Read the projection before appending: this is what the response compares
-    # against to tell the user whether their cooldown actually moved.
-    projected_before = history_repo.load().get(name)
-    event = history_repo.append_event(name, cooked_iso, backfilled=backdated)
-    superseded = projected_before is not None and (
-        date.fromisoformat(projected_before) > cooked_on
-    )
+    # This handler touches four repositories, and the compensation below only
+    # makes sense if nothing can observe the state between them. One window
+    # over the whole data directory gives that: the lock is a single reentrant
+    # object shared by every repository, so the nested acquisitions inside
+    # ``append_event`` / ``consume`` / the tuning block cost nothing. Before,
+    # this ran as four independent windows and another process could see a cook
+    # recorded whose ingredients had not been consumed yet.
+    with data_lock:
+        dishes = dish_repo.load()
+        dish = next((d for d in dishes if d.name == name), None)
+        if dish is None:
+            raise LookupError(f"'{raw_name}' is not in the recipe catalog.")
 
-    essentials = [ing for ing, is_essential in dish.ingredients.items() if is_essential]
+        # Snapshot the decision state as it was at the moment the user chose to
+        # cook — before history and fridge are mutated below. The learning
+        # update at the end replays the ranking against this snapshot.
+        fridge_snapshot = fridge_repo.load_set()
+        days_snapshot = days_since_last_cook()
 
-    try:
-        consumed = fridge_repo.consume(essentials)
-    except Exception:
+        # Read the projection before appending: this is what the response
+        # compares against to tell the user whether their cooldown moved.
+        projected_before = history_repo.load().get(name)
+        event = history_repo.append_event(name, cooked_iso, backfilled=backdated)
+        superseded = projected_before is not None and (
+            date.fromisoformat(projected_before) > cooked_on
+        )
+
+        essentials = [
+            ing for ing, is_essential in dish.ingredients.items() if is_essential
+        ]
+
         try:
-            # Hard delete, not a retraction: a cook that was rolled back never
-            # happened, so it must leave no trace in the log.
-            history_repo.delete_event(event.id)
+            consumed = fridge_repo.consume(essentials)
         except Exception:
-            logger.exception("register_cooked_meal rollback failed")
-        raise
+            try:
+                # Hard delete, not a retraction: a cook that was rolled back
+                # never happened, so it must leave no trace in the log.
+                history_repo.delete_event(event.id)
+            except Exception:
+                logger.exception("register_cooked_meal rollback failed")
+            raise
 
-    # Best-effort online weight tuning. This must never fail or roll back the
-    # cook registration: any error here is logged and swallowed.
-    #
-    # Skipped for backdated cooks: the snapshot above reflects today's fridge
-    # and history, not the state at the time the meal was actually cooked, so
-    # replaying it would teach the learner from a decision that never happened.
-    if not backdated:
-        try:
-            with tuning_repo.lock:
+        # Best-effort online weight tuning. This must never fail or roll back
+        # the cook registration: any error here is logged and swallowed.
+        #
+        # Skipped for backdated cooks: the snapshot above reflects today's
+        # fridge and history, not the state at the time the meal was actually
+        # cooked, so replaying it would teach the learner from a decision that
+        # never happened.
+        if not backdated:
+            try:
                 state = tuning_repo.load()
                 rewards = tuning.compute_rewards(
                     name, dishes, fridge_snapshot, days_snapshot, state["candidates"]
@@ -115,8 +125,8 @@ def HANDLER(args: dict, **kwargs):
                     state = tuning.apply_update(state, rewards)
                     state = tuning.select_deployed(state)
                     tuning_repo.save(state)
-        except Exception:
-            logger.exception("weight tuning update failed (non-critical)")
+            except Exception:
+                logger.exception("weight tuning update failed (non-critical)")
 
     if consumed:
         parts = []

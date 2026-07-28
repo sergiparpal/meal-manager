@@ -1172,6 +1172,49 @@ def test_merge_ingredient_alias_fridge_counts():
           f"got {_repos_mod.fridge_repo.load()}")
 
 
+def test_merge_ingredient_alias_keeps_expiry():
+    print("\n-- merge_ingredient_alias (expiry survives the merge) --")
+    # The merge ran through the count-only view, so the retired name's date was
+    # dropped by omission: merging the only stocked spelling onto a canonical
+    # name that was not in the fridge silently erased a date the user recorded.
+    _clear_aliases()
+    update_fridge_inventory({"action": "set", "ingredients": {
+        "al_x1": {"count": 3, "expires_on": "2026-08-01"},
+    }})
+    res = parse(merge_ingredient_alias({"from_name": "al_x1", "to_name": "al_x2"}))
+    entries = _repos_mod.fridge_repo.load_entries()
+    check("a rename carries the date over",
+          entries.get("al_x2", {}).get("expires_on") == "2026-08-01",
+          f"got {entries.get('al_x2')}")
+    check("the date is reported back",
+          res.get("resulting_expiry") == "2026-08-01", f"got {res}")
+
+    # Two dates: the earlier one wins, because the merged entry should warn on
+    # whichever batch goes off first.
+    _clear_aliases()
+    update_fridge_inventory({"action": "set", "ingredients": {
+        "al_y1": {"count": 1, "expires_on": "2026-09-10"},
+        "al_y2": {"count": 1, "expires_on": "2026-09-02"},
+    }})
+    merge_ingredient_alias({"from_name": "al_y1", "to_name": "al_y2"})
+    check("the earlier of two dates wins",
+          _repos_mod.fridge_repo.load_entries().get("al_y2", {}).get("expires_on")
+          == "2026-09-02",
+          f"got {_repos_mod.fridge_repo.load_entries().get('al_y2')}")
+
+    # A known date beats an absent one: no date means unknown, not "never".
+    _clear_aliases()
+    update_fridge_inventory({"action": "set", "ingredients": {
+        "al_z1": {"count": 1, "expires_on": "2026-10-05"},
+        "al_z2": 2,
+    }})
+    merge_ingredient_alias({"from_name": "al_z1", "to_name": "al_z2"})
+    check("a known date beats an absent one",
+          _repos_mod.fridge_repo.load_entries().get("al_z2", {}).get("expires_on")
+          == "2026-10-05",
+          f"got {_repos_mod.fridge_repo.load_entries().get('al_z2')}")
+
+
 def test_merge_ingredient_alias_essential_wins():
     print("\n-- merge_ingredient_alias (essential wins) --")
     _clear_aliases()
@@ -1519,6 +1562,24 @@ def test_update_fridge_add_clamps_to_max():
     fridge = _repos_mod.fridge_repo.load()
     check("a running total cannot exceed MAX_PORTION_COUNT",
           fridge.get("clamp_me") == cap, f"got {fridge.get('clamp_me')}")
+
+
+def test_update_fridge_reports_new_entries_as_new():
+    print("\n-- update_fridge_inventory distinguishes new from zero --")
+    # "0 -> 4" read as a correction to a stock level the user had told us about;
+    # an ingredient the fridge had never heard of is a different fact.
+    msg = update_fridge_inventory({"action": "set", "ingredients": {"unseen_item": 4}})
+    check("a first-time entry is not reported as having been 0",
+          "new -> 4" in msg and "0 -> 4" not in msg, f"got {msg}")
+
+    known_zero = update_fridge_inventory(
+        {"action": "set", "ingredients": {"ran_out": 0}}
+    )
+    check("setting a count to zero still reports the number",
+          "-> 0" in known_zero, f"got {known_zero}")
+    bumped = update_fridge_inventory({"action": "add", "ingredients": {"ran_out": 2}})
+    check("a known-zero entry reports the real previous count",
+          "0 -> 2" in bumped, f"got {bumped}")
 
 
 def test_update_fridge_expiry_on_staple():
@@ -1976,6 +2037,7 @@ def main():
         # clear the map when they are done.
         run(test_merge_ingredient_alias_catalog_only)
         run(test_merge_ingredient_alias_fridge_counts)
+        run(test_merge_ingredient_alias_keeps_expiry)
         run(test_merge_ingredient_alias_essential_wins)
         run(test_merge_ingredient_alias_boundary_resolution)
         run(test_merge_ingredient_alias_unlocks_a_dish)
@@ -1986,6 +2048,7 @@ def main():
         run(test_dii_remove_resolves_aliases)
         run(test_dii_corrupt_session_backup_is_swept)
         run(test_update_fridge_add_clamps_to_max)
+        run(test_update_fridge_reports_new_entries_as_new)
         run(test_update_fridge_expiry_on_staple)
         run(test_merge_alias_clamps_out_of_band_count)
         run(test_init_session_rejects_bad_pre_select)

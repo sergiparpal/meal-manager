@@ -14,11 +14,12 @@ SCHEMA = {
         "returns {missing_ingredient, unlocks_dishes, unlocks_count, "
         "still_missing, score}. 'still_missing' is the size of the smallest "
         "basket that unlocks a dish through this ingredient — 1 means buying it "
-        "alone is enough. Rows are sorted by that basket size first, so genuine "
-        "one-item unlocks lead, then by how many dishes name the ingredient, "
-        "then by projected score. 'score' describes the cheapest unlock, not the "
-        "best-scoring dish at any basket size. An empty list means no unlocks at "
-        "that threshold."
+        "alone is enough. Every other field describes that same cheapest basket: "
+        "'unlocks_dishes' and 'unlocks_count' cover the dishes it actually "
+        "reaches, and 'score' is the best of those dishes — never a meal the "
+        "basket cannot buy. Rows are sorted by basket size first, so genuine "
+        "one-item unlocks lead, then by how many dishes are reached, then by "
+        "projected score. An empty list means no unlocks at that threshold."
     ),
     "type": "object",
     "properties": {
@@ -40,7 +41,9 @@ SCHEMA = {
 
 @tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
-    max_missing = args.get("max_missing", 1) if isinstance(args, dict) else 1
+    # ``tool_handler`` validates the argument keys against SCHEMA before this
+    # runs, and that check rejects a non-dict outright, so ``args`` is a dict.
+    max_missing = args.get("max_missing", 1)
     if isinstance(max_missing, bool) or not isinstance(max_missing, int):
         raise ValueError("max_missing must be an integer")
     if not 1 <= max_missing <= 5:
