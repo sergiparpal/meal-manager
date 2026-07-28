@@ -3,11 +3,10 @@
 import json
 import logging
 import math
-import threading
 from datetime import date
 from pathlib import Path
 
-from .. import atomic_write_json
+from .. import atomic_write_json, data_lock
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +88,8 @@ class JsonFridgeRepository:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        self.lock = threading.Lock()
+        # Shared with every other repository — see ``src/filelock.py``.
+        self.lock = data_lock
 
     def load(self) -> dict:
         """Load the inventory as ``{name: count}``; ``None`` means staple.
@@ -196,15 +196,20 @@ class JsonFridgeRepository:
         The count-only view is what most callers deal in, and writing it back
         verbatim would silently erase every ``expires_on``. Names absent from
         *ingredients* are removed; names present keep their stored date.
+
+        The read and the write are one load-modify-save window, so they belong
+        inside the lock. It is reentrant, so callers that already hold it
+        (``remove_items``, ``consume``, ``restore_counts``) are unaffected.
         """
-        known = self.load_entries()
-        self.save_entries({
-            name: {
-                "count": count,
-                "expires_on": known.get(name, {}).get("expires_on"),
-            }
-            for name, count in ingredients.items()
-        })
+        with self.lock:
+            known = self.load_entries()
+            self.save_entries({
+                name: {
+                    "count": count,
+                    "expires_on": known.get(name, {}).get("expires_on"),
+                }
+                for name, count in ingredients.items()
+            })
 
     def remove_items(self, items: list[str]) -> None:
         """Atomically drop specific keys if present.

@@ -15,7 +15,12 @@ from . import engine
 from .finalizer import commit as _commit
 from .presenter import to_response as _to_response
 from .session import DIISession
-from .store import IngredientSessionStore, validate_session_id
+from .store import IngredientSessionStore
+
+# Deliberate re-export, not dead code: init_ingredient_session imports
+# validate_session_id from here. The redundant alias is the explicit form that
+# says so.
+from .store import validate_session_id as validate_session_id
 
 logger = logging.getLogger(__name__)
 

@@ -11,10 +11,9 @@ stored data honest about what the user has.
 
 import json
 import logging
-import threading
 from pathlib import Path
 
-from .. import atomic_write_json
+from .. import atomic_write_json, data_lock
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +23,8 @@ class JsonAliasRepository:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        self.lock = threading.Lock()
+        # Shared with every other repository — see ``src/filelock.py``.
+        self.lock = data_lock
         # (file identity, parsed mapping) for the most recent successful read.
         # ``resolve`` runs once per ingredient name at the tool boundary, so
         # re-reading and re-parsing the file each time turned a single

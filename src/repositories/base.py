@@ -7,16 +7,30 @@ This keeps the door open for in-memory test doubles or alternate backends
 without coupling them to a specific base class.
 """
 
-import threading
+from contextlib import AbstractContextManager
+from pathlib import Path
 from typing import Protocol
 
 from ..dish import Dish
+
+# The concrete lock is the single shared ``DataDirLock`` from ``src/filelock.py``
+# — one advisory lock over the whole data directory, not one per file. Callers
+# only ever use it as a context manager, so that is all the protocols promise.
+# Declared read-only (a property rather than a bare attribute) because a
+# mutable protocol attribute is invariant, which would admit only something
+# that is exactly an ``AbstractContextManager``; nothing reassigns ``.lock``.
+#
+# ``path`` is a plain attribute because ``configure()`` reassigns it in place —
+# that is the documented seam hosts and tests use to redirect persistence.
 
 
 class DishRepository(Protocol):
     """Persistence boundary for the dish catalog."""
 
-    lock: threading.Lock
+    path: Path
+
+    @property
+    def lock(self) -> AbstractContextManager: ...
 
     def load(self) -> list[Dish]: ...
     def save(self, dishes: list[Dish]) -> None: ...
@@ -36,7 +50,10 @@ class FridgeRepository(Protocol):
     ``{"count": …, "expires_on": …}``.
     """
 
-    lock: threading.Lock
+    path: Path
+
+    @property
+    def lock(self) -> AbstractContextManager: ...
 
     def load(self) -> dict: ...
     def load_entries(self) -> dict: ...
@@ -64,6 +81,8 @@ class HistoryRepository(Protocol):
     The repository owns its own locking — callers do not hold it.
     """
 
+    path: Path
+
     def load(self) -> dict[str, str]: ...
     def load_events(self, *, strict: bool = False) -> list: ...
     def append_event(
@@ -88,7 +107,10 @@ class AliasRepository(Protocol):
     ``resolve`` be a single hop rather than a walk.
     """
 
-    lock: threading.Lock
+    path: Path
+
+    @property
+    def lock(self) -> AbstractContextManager: ...
 
     def load(self) -> dict[str, str]: ...
     def save(self, mapping: dict) -> None: ...
@@ -105,7 +127,10 @@ class TuningRepository(Protocol):
     exposed so the cook handler can wrap the load-modify-save sequence.
     """
 
-    lock: threading.Lock
+    path: Path
+
+    @property
+    def lock(self) -> AbstractContextManager: ...
 
     def load(self) -> dict: ...
     def save(self, state: dict) -> None: ...

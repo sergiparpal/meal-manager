@@ -2,10 +2,9 @@
 
 import json
 import logging
-import threading
 from pathlib import Path
 
-from .. import atomic_write_json
+from .. import atomic_write_json, data_lock
 from ..dish import Dish
 
 logger = logging.getLogger(__name__)
@@ -16,7 +15,8 @@ class JsonDishRepository:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        self.lock = threading.Lock()
+        # Shared with every other repository — see ``src/filelock.py``.
+        self.lock = data_lock
         # Raw rows the most recent parse could not read, kept so ``save`` can
         # round-trip them without re-reading and re-parsing the whole catalog.
         # ``None`` means "not known yet" and makes ``save`` go back to disk.

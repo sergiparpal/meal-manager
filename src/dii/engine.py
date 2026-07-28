@@ -10,7 +10,6 @@ from typing import cast
 from ..dish import Dish
 from .session import DIISession, now_iso
 
-
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

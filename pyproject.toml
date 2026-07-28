@@ -1,0 +1,21 @@
+# Tool configuration only. This plugin is loaded by path as
+# hermes_plugins.meal_manager, not installed as a distribution, so there is
+# deliberately no [build-system] table and no [project] metadata here.
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+# Anchored on a path separator as well as the string start: mypy matches this
+# against the full path it discovered, which is absolute under the -p shim.
+exclude = ['(^|/)test_[^/]*\.py$']
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# Deliberately narrow. The broad rule sets are dominated by line-length and
+# stylistic findings that this codebase does not benefit from churning.
+select = ["F", "B", "I"]

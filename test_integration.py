@@ -14,6 +14,7 @@ import json
 import shutil
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ _repos_mod = importlib.import_module(".src.repositories", _PLUGIN_DIR.name)
 _dii_mod = importlib.import_module(".src.dii", _PLUGIN_DIR.name)
 _tuning_mod = importlib.import_module(".src.tuning", _PLUGIN_DIR.name)
 _handlers_common = importlib.import_module(".src.handlers._common", _PLUGIN_DIR.name)
+_handlers_pkg = importlib.import_module(".src.handlers", _PLUGIN_DIR.name)
 
 # ---------------------------------------------------------------------------
 # Tmp data directory lifecycle
@@ -126,6 +128,22 @@ def check(label: str, condition: bool, detail: str = ""):
         if detail:
             msg += f"  -- {detail}"
         print(msg)
+
+
+def run(test_fn):
+    """Run one test function, recording an exception as a failure.
+
+    An unguarded call means one raised exception aborts every test after it, so
+    a single mistake hides the rest of the suite. Catching here keeps the run
+    going and still fails the process via the _failed counter.
+    """
+    global _failed
+    try:
+        test_fn()
+    except Exception as exc:
+        _failed += 1
+        print(f"  FAIL  {test_fn.__name__} raised {type(exc).__name__}: {exc}")
+        traceback.print_exc()
 
 
 def parse(raw: str) -> Any:
@@ -272,7 +290,8 @@ def test_cook_decrements_instead_of_deleting():
 
 def test_register_cooked_meal_backdated():
     print("\n-- register_cooked_meal (backdated) --")
-    from datetime import date as _date, timedelta as _timedelta
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
     add_dish({"name": "Backdate Dish", "ingredients": {"bd_a": True}})
     update_fridge_inventory({"action": "set", "ingredients": {"bd_a": 2}})
 
@@ -295,7 +314,8 @@ def test_register_cooked_meal_backdated():
 
 def test_register_cooked_meal_backdate_preserves_newer():
     print("\n-- register_cooked_meal (backdating keeps the newer entry) --")
-    from datetime import date as _date, timedelta as _timedelta
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
     add_dish({"name": "Paella Reciente", "ingredients": {"pr_a": True}})
     update_fridge_inventory({"action": "set", "ingredients": {"pr_a": 10}})
 
@@ -795,7 +815,8 @@ def test_dii_add_manual_empty():
 
 def test_online_weight_tuning():
     print("\n-- online weight tuning --")
-    from datetime import date as _date, timedelta as _timedelta
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
 
     # Give the two dishes opposing profiles so the ranking depends on w and the
     # cook produces a real (non-skipped) learning event: A is well-rested but has
@@ -857,7 +878,8 @@ def test_missing_required_arg_message():
 
 def test_history_event_log_on_disk():
     print("\n-- register_cooked_meal writes a v2 event log --")
-    from datetime import date as _date, timedelta as _timedelta
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
     add_dish({"name": "Log Dish", "ingredients": {"log_a": True}})
     update_fridge_inventory({"action": "set", "ingredients": {"log_a": 5}})
 
@@ -1013,7 +1035,8 @@ def test_list_cooking_history_surfaces_corruption():
 
 def test_fridge_expiry_end_to_end():
     print("\n-- update_fridge_inventory / list_fridge (expiry) --")
-    from datetime import date as _date, timedelta as _timedelta
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
     soon = (_date.today() + _timedelta(days=2)).isoformat()
     stale = (_date.today() - _timedelta(days=2)).isoformat()
     later = (_date.today() + _timedelta(days=60)).isoformat()
@@ -1735,113 +1758,250 @@ def test_dish_load_preserves_malformed():
 
 
 # ---------------------------------------------------------------------------
+# Tool discovery and plugin wiring
+# ---------------------------------------------------------------------------
+
+def _public_handler_modules() -> set[str]:
+    """Module names under src/handlers/ that iter_tools() should pick up."""
+    handlers_dir = _PLUGIN_DIR / "src" / "handlers"
+    return {
+        p.stem for p in handlers_dir.glob("*.py")
+        if not p.stem.startswith("_")
+    }
+
+
+def test_iter_tools_discovers_every_handler():
+    print("\n-- iter_tools (auto-discovery) --")
+    tools = list(_handlers_pkg.iter_tools())
+    modules = _public_handler_modules()
+
+    # Count equality is the point: a module that fails to import, or that lost
+    # one of NAME/SCHEMA/HANDLER, is dropped with only a log line otherwise.
+    check("one tool per public handler module",
+          len(tools) == len(modules),
+          f"{len(tools)} tools vs {len(modules)} modules: "
+          f"{sorted(modules - {n for n, _, _ in tools})}")
+
+    names = [name for name, _, _ in tools]
+    check("every NAME is a non-empty string",
+          all(isinstance(n, str) and n.strip() for n in names))
+    check("every NAME is unique", len(set(names)) == len(names), f"got {names}")
+    check("module names match tool names", set(names) == modules,
+          f"symmetric difference: {set(names) ^ modules}")
+
+    check("every SCHEMA is a dict", all(isinstance(s, dict) for _, s, _ in tools))
+    bad_desc = [
+        n for n, s, _ in tools
+        if not isinstance(s.get("description"), str) or not s["description"].strip()
+    ]
+    check("every SCHEMA has a non-empty description", bad_desc == [], f"got {bad_desc}")
+    check("every HANDLER is callable", all(callable(h) for _, _, h in tools))
+    check("iteration order is alphabetical", names == sorted(names), f"got {names}")
+
+
+def test_plugin_yaml_matches_registered_tools():
+    print("\n-- plugin.yaml / iter_tools sync --")
+    # plugin.yaml is documented as manually synced with src/handlers/, so drift
+    # is a test failure rather than something discovered at load time. Parsed
+    # with the stdlib: the tools list is a simple block sequence and the repo
+    # has no runtime dependency on PyYAML.
+    text = (_PLUGIN_DIR / "plugin.yaml").read_text(encoding="utf-8")
+    declared: list[str] = []
+    in_list = False
+    for line in text.splitlines():
+        if line.startswith("provides_tools:"):
+            in_list = True
+            continue
+        if in_list:
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                declared.append(stripped[2:].strip())
+            elif stripped and not stripped.startswith("#"):
+                break  # next top-level key ends the sequence
+
+    check("the tools list was actually parsed", len(declared) > 0, f"got {declared}")
+    registered = {name for name, _, _ in _handlers_pkg.iter_tools()}
+    check("plugin.yaml declares exactly the registered tools",
+          set(declared) == registered,
+          f"only in yaml: {sorted(set(declared) - registered)}; "
+          f"only registered: {sorted(registered - set(declared))}")
+    check("no duplicate entries in plugin.yaml",
+          len(declared) == len(set(declared)), f"got {declared}")
+
+
+class _FakeCtx:
+    """Minimal stand-in for the Hermes plugin context."""
+
+    def __init__(self):
+        self.registered: list[tuple] = []
+        self.injected: list[str] = []
+
+    def register_tool(self, name, plugin, schema, handler):
+        self.registered.append((name, plugin, schema, handler))
+
+    def inject_message(self, text):
+        self.injected.append(text)
+
+
+def test_register_wires_every_tool():
+    print("\n-- register() (plugin entry point) --")
+    # register(data_dir=…) reconfigures the repository and DII singletons
+    # globally, so this must restore _TMP_DATA_DIR afterwards or every test
+    # that runs after it reads the wrong directory. It is placed late in
+    # main() for the same reason.
+    assert _TMP_DATA_DIR is not None
+    other = Path(tempfile.mkdtemp(prefix="meal_manager_register_"))
+    try:
+        ctx = _FakeCtx()
+        _pkg.register(ctx, data_dir=other)
+
+        expected = [name for name, _, _ in _handlers_pkg.iter_tools()]
+        got = [name for name, _, _, _ in ctx.registered]
+        check("one register_tool call per discovered tool",
+              got == expected, f"got {got}")
+        check("every registration names the plugin",
+              all(plugin == "meal_manager" for _, plugin, _, _ in ctx.registered))
+        check("schemas and handlers are passed through",
+              all(isinstance(s, dict) and callable(h)
+                  for _, _, s, h in ctx.registered))
+
+        skill_text = (_PLUGIN_DIR / "skill.md").read_text(encoding="utf-8")
+        check("skill.md was injected exactly once", len(ctx.injected) == 1)
+        check("the injected text is skill.md",
+              ctx.injected == [skill_text] if ctx.injected else False)
+
+        check("data_dir redirected the dish repository",
+              _repos_mod.dish_repo.path == other / "dishes.json",
+              f"got {_repos_mod.dish_repo.path}")
+        check("data_dir redirected the DII session directory",
+              _dii_mod._store.session_dir == other / "sessions",
+              f"got {_dii_mod._store.session_dir}")
+    finally:
+        _repos_mod.configure(_TMP_DATA_DIR)
+        _dii_mod.configure(_TMP_DATA_DIR / "sessions")
+        shutil.rmtree(other, ignore_errors=True)
+
+    check("configuration restored for the tests that follow",
+          _repos_mod.dish_repo.path == _TMP_DATA_DIR / "dishes.json",
+          f"got {_repos_mod.dish_repo.path}")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
 def main():
     _setup_tmp_data()
     try:
-        test_list_fridge()
+        run(test_list_fridge)
         # These two run against the untouched seed fridge: the fridge tests
         # below add 'pollo', which would make Arroz con Pollo cookable, and
         # would also overwrite the legacy list-shaped fixture file.
-        test_fridge_legacy_list_migrates()
-        test_get_missing_for_dish()
-        test_update_fridge_add()
-        test_update_fridge_add_duplicate()
-        test_update_fridge_remove_ignores_counts()
-        test_update_fridge_remove()
-        test_get_meal_suggestions()
-        test_get_quick_shopping_list()
-        test_get_quick_shopping_list_max_missing()
-        test_register_cooked_meal()
-        test_register_cooked_meal_bogus()
-        test_register_cooked_meal_rollback()
-        test_delete_history_entry()
-        test_delete_history_entry_bogus()
-        test_add_dish_dict()
-        test_add_dish_list()
-        test_add_dish_duplicate()
-        test_add_dish_invalid_inputs()
-        test_edit_dish()
-        test_edit_dish_bogus()
-        test_delete_dish()
-        test_delete_dish_bogus()
-        test_add_dishes_batch()
-        test_clear_fridge()
-        test_clear_fridge_already_empty()
+        run(test_fridge_legacy_list_migrates)
+        run(test_get_missing_for_dish)
+        run(test_update_fridge_add)
+        run(test_update_fridge_add_duplicate)
+        run(test_update_fridge_remove_ignores_counts)
+        run(test_update_fridge_remove)
+        run(test_get_meal_suggestions)
+        run(test_get_quick_shopping_list)
+        run(test_get_quick_shopping_list_max_missing)
+        run(test_register_cooked_meal)
+        run(test_register_cooked_meal_bogus)
+        run(test_register_cooked_meal_rollback)
+        run(test_delete_history_entry)
+        run(test_delete_history_entry_bogus)
+        run(test_add_dish_dict)
+        run(test_add_dish_list)
+        run(test_add_dish_duplicate)
+        run(test_add_dish_invalid_inputs)
+        run(test_edit_dish)
+        run(test_edit_dish_bogus)
+        run(test_delete_dish)
+        run(test_delete_dish_bogus)
+        run(test_add_dishes_batch)
+        run(test_clear_fridge)
+        run(test_clear_fridge_already_empty)
 
         # Portion counts. These run on the emptied fridge and set up their own
         # state, so they cannot perturb the assertions above.
-        test_fridge_counts_and_staples()
-        test_cook_decrements_instead_of_deleting()
-        test_register_cooked_meal_backdated()
-        test_register_cooked_meal_backdate_preserves_newer()
+        run(test_fridge_counts_and_staples)
+        run(test_cook_decrements_instead_of_deleting)
+        run(test_register_cooked_meal_backdated)
+        run(test_register_cooked_meal_backdate_preserves_newer)
 
         # DII
-        test_dii_full_lifecycle()
-        test_dii_clear_all()
-        test_dii_expired_session()
-        test_dii_finalize_twice()
-        test_dii_finalize_options()
-        test_dii_finalize_rollback()
-        test_dii_get_state()
-        test_dii_add_manual_empty()
+        run(test_dii_full_lifecycle)
+        run(test_dii_clear_all)
+        run(test_dii_expired_session)
+        run(test_dii_finalize_twice)
+        run(test_dii_finalize_options)
+        run(test_dii_finalize_rollback)
+        run(test_dii_get_state)
+        run(test_dii_add_manual_empty)
 
         # Regression tests for the review fixes. The state-preserving ones run
         # first; the two that overwrite dishes.json wholesale run last so they
         # cannot perturb the catalog the earlier assertions depend on.
-        test_missing_required_arg_message()
-        test_unknown_argument_rejected()
-        test_history_event_log_on_disk()
-        test_history_rollback_hard_deletes_the_event()
-        test_delete_history_entry_releases_the_cooldown()
-        test_list_cooking_history()
-        test_list_cooking_history_validation()
-        test_list_cooking_history_surfaces_corruption()
-        test_dish_instructions_roundtrip()
-        test_edit_dish_preserves_instructions()
-        test_dish_instructions_errors()
-        test_add_dish_with_instructions()
-        test_add_dishes_batch_partial_failure()
-        test_dii_remove_optional_no_recalc()
-        test_edit_dish_empty_rejected()
-        test_dii_finalize_empty_selection_no_wipe()
-        test_dii_store_ttl_and_recovery()
-        test_dii_session_lock_is_exclusive()
-        test_dii_finalize_reports_fridge_additions()
+        run(test_missing_required_arg_message)
+        run(test_unknown_argument_rejected)
+        run(test_history_event_log_on_disk)
+        run(test_history_rollback_hard_deletes_the_event)
+        run(test_delete_history_entry_releases_the_cooldown)
+        run(test_list_cooking_history)
+        run(test_list_cooking_history_validation)
+        run(test_list_cooking_history_surfaces_corruption)
+        run(test_dish_instructions_roundtrip)
+        run(test_edit_dish_preserves_instructions)
+        run(test_dish_instructions_errors)
+        run(test_add_dish_with_instructions)
+        run(test_add_dishes_batch_partial_failure)
+        run(test_dii_remove_optional_no_recalc)
+        run(test_edit_dish_empty_rejected)
+        run(test_dii_finalize_empty_selection_no_wipe)
+        run(test_dii_store_ttl_and_recovery)
+        run(test_dii_session_lock_is_exclusive)
+        run(test_dii_finalize_reports_fridge_additions)
 
         # Online weight tuning (self-contained; runs late so it cannot perturb
         # the fridge/catalog state the earlier assertions depend on).
-        test_online_weight_tuning()
+        run(test_online_weight_tuning)
 
         # Ingredient expiry. Self-contained: uses its own exp_* keys.
-        test_fridge_expiry_end_to_end()
-        test_fridge_expiry_validation()
+        run(test_fridge_expiry_end_to_end)
+        run(test_fridge_expiry_validation)
 
         # Ingredient aliases. These register a persistent alias map that the
         # tool boundary consults on every later call, so they run late and
         # clear the map when they are done.
-        test_merge_ingredient_alias_catalog_only()
-        test_merge_ingredient_alias_fridge_counts()
-        test_merge_ingredient_alias_essential_wins()
-        test_merge_ingredient_alias_boundary_resolution()
-        test_merge_ingredient_alias_unlocks_a_dish()
-        test_merge_ingredient_alias_errors()
+        run(test_merge_ingredient_alias_catalog_only)
+        run(test_merge_ingredient_alias_fridge_counts)
+        run(test_merge_ingredient_alias_essential_wins)
+        run(test_merge_ingredient_alias_boundary_resolution)
+        run(test_merge_ingredient_alias_unlocks_a_dish)
+        run(test_merge_ingredient_alias_errors)
 
         # Regression tests for the code-review findings.
-        test_dii_init_resolves_aliases()
-        test_dii_remove_resolves_aliases()
-        test_dii_corrupt_session_backup_is_swept()
-        test_update_fridge_add_clamps_to_max()
-        test_update_fridge_expiry_on_staple()
-        test_merge_alias_clamps_out_of_band_count()
-        test_init_session_rejects_bad_pre_select()
-        test_history_unreadable_degrades_and_reports()
+        run(test_dii_init_resolves_aliases)
+        run(test_dii_remove_resolves_aliases)
+        run(test_dii_corrupt_session_backup_is_swept)
+        run(test_update_fridge_add_clamps_to_max)
+        run(test_update_fridge_expiry_on_staple)
+        run(test_merge_alias_clamps_out_of_band_count)
+        run(test_init_session_rejects_bad_pre_select)
+        run(test_history_unreadable_degrades_and_reports)
+
+        # Tool discovery and plugin wiring. Read-only against the catalog, but
+        # test_register_wires_every_tool reconfigures the repository and DII
+        # singletons globally and restores them in its own finally: — so it
+        # runs late, where a slip would damage the least.
+        run(test_iter_tools_discovers_every_handler)
+        run(test_plugin_yaml_matches_registered_tools)
+        run(test_register_wires_every_tool)
 
         # These overwrite dishes.json wholesale — keep them last.
-        test_dii_session_id_traversal_rejected()
-        test_dish_load_preserves_malformed()
+        run(test_dii_session_id_traversal_rejected)
+        run(test_dish_load_preserves_malformed)
 
     finally:
         _teardown_tmp_data()

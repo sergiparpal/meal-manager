@@ -28,13 +28,58 @@ jobs:
       - name: Integration smoke test
         run: python3 test_integration.py
 
+  types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # Pinned exactly: an unpinned type checker turns an upstream release into
+      # a surprise red build on an unrelated PR. Development/CI only — nothing
+      # under src/ imports it.
+      - name: Install mypy
+        run: pip install mypy==2.3.0
+
+      # The repo directory name contains a hyphen, which is not a valid Python
+      # package name. Symlink it under a valid name so mypy can resolve the
+      # relative imports the plugin uses throughout.
+      - name: Type check
+        run: |
+          mkdir -p "$RUNNER_TEMP/shim"
+          ln -sfn "$GITHUB_WORKSPACE" "$RUNNER_TEMP/shim/meal_manager"
+          MYPYPATH="$RUNNER_TEMP/shim" mypy -p meal_manager
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install coverage
+        run: pip install coverage==7.15.0
+
+      # A ratchet, not a goal: raise --fail-under when coverage rises, never
+      # lower it to make a build pass. Measured at 92%; one point of headroom
+      # against rounding.
+      - name: Measure coverage
+        run: |
+          coverage run --source=src,. --omit="test_*,*/__pycache__/*" test_unit.py
+          coverage run --append --source=src,. --omit="test_*,*/__pycache__/*" test_integration.py
+          coverage report --sort=cover --fail-under=91
+
   ci-complete:
     # One stable check name for the branch ruleset to require. Matrix legs come and go, so
     # requiring them individually would turn a dropped Python version into a required check
     # that never reports again — and an unsatisfiable required check blocks every merge.
     # This job depends on the ones that must pass and fails unless all of them succeeded.
     if: always()
-    needs: [tests]
+    needs: [tests, types, coverage]
     runs-on: ubuntu-latest
     steps:
       - name: Fail unless every required job succeeded

@@ -2,10 +2,9 @@
 
 import json
 import logging
-import threading
 from pathlib import Path
 
-from .. import atomic_write_json, tuning
+from .. import atomic_write_json, data_lock, tuning
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +21,8 @@ class JsonTuningRepository:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        self.lock = threading.Lock()
+        # Shared with every other repository — see ``src/filelock.py``.
+        self.lock = data_lock
 
     def load(self) -> dict:
         if not self.path.exists():

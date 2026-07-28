@@ -10,7 +10,10 @@ Usage:
 import copy
 import importlib
 import json
+import shutil
 import sys
+import tempfile
+import traceback
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -28,6 +31,8 @@ _tuning_mod = importlib.import_module(".src.tuning", _PLUGIN_DIR.name)
 _handlers_common = importlib.import_module(".src.handlers._common", _PLUGIN_DIR.name)
 _repos_mod = importlib.import_module(".src.repositories", _PLUGIN_DIR.name)
 _history_event_mod = importlib.import_module(".src.history_event", _PLUGIN_DIR.name)
+_filelock_mod = importlib.import_module(".src.filelock", _PLUGIN_DIR.name)
+_src_mod = importlib.import_module(".src", _PLUGIN_DIR.name)
 reject_unknown_args = _handlers_common.reject_unknown_args
 
 Dish = _dish_mod.Dish
@@ -59,6 +64,22 @@ def check(label: str, condition: bool, detail: str = ""):
         if detail:
             msg += f"  -- {detail}"
         print(msg)
+
+
+def run(test_fn):
+    """Run one test function, recording an exception as a failure.
+
+    An unguarded call means one raised exception aborts every test after it, so
+    a single mistake hides the rest of the suite. Catching here keeps the run
+    going and still fails the process via the _failed counter.
+    """
+    global _failed
+    try:
+        test_fn()
+    except Exception as exc:
+        _failed += 1
+        print(f"  FAIL  {test_fn.__name__} raised {type(exc).__name__}: {exc}")
+        traceback.print_exc()
 
 
 # ---------------------------------------------------------------------------
@@ -524,7 +545,8 @@ def test_fridge_repository_non_finite_counts():
 
 def test_expiry_status():
     print("\n-- expiry_status --")
-    from datetime import date as _date, timedelta as _timedelta
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
     _json_fridge = importlib.import_module(".src.repositories.json_fridge",
                                            _PLUGIN_DIR.name)
     status = _json_fridge.expiry_status
@@ -1558,94 +1580,378 @@ def test_tuning_compute_rewards_no_signal():
     check("normal cook produces rewards", isinstance(rewards2, dict) and len(rewards2) > 0)
 
 
-def main():
-    test_dish_normalize_ingredient()
-    test_dish_normalize_name()
-    test_dish_can_cook_with()
-    test_dish_can_cook_with_no_ingredients()
-    test_dish_can_cook_with_only_optional()
-    test_dish_to_dict()
-    test_dish_from_dict()
-    test_dish_from_dict_invalid()
-    test_dish_add_ingredient()
-    test_dish_add_ingredient_validation()
-    test_dish_ingredient_keys_normalized_on_construction()
-    test_dish_rejects_colliding_ingredient_keys()
-    test_dish_instructions()
+# ---------------------------------------------------------------------------
+# Dish repository rollback tests
+# ---------------------------------------------------------------------------
 
-    test_calculate_score_basic()
-    test_calculate_score_cooldown()
-    test_calculate_score_no_ingredients()
-    test_calculate_score_partial_ingredients()
-    test_calculate_score_declaring_optionals_never_penalizes()
-    test_calculate_score_match_depends_on_present_count_only()
-    test_calculate_score_recency_scaling()
-    test_score_components_agree_with_calculate_score()
 
-    test_suggest_dishes_basic()
-    test_suggest_dishes_excludes_recent()
-    test_suggest_dishes_default_recency()
+def test_dish_repo_restore_adds_back():
+    print("\n-- JsonDishRepository.restore (delta-rollback) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_dish_"))
+    try:
+        repo = _repos_mod.JsonDishRepository(tmp / "dishes.json")
+        paella = Dish(name="paella", ingredients={"arroz": True, "azafran": False})
+        stew = Dish(name="stew", ingredients={"beans": True})
+        repo.save([paella, stew])
 
-    test_suggest_quick_shopping_basic()
-    test_suggest_quick_shopping_two_missing()
-    test_suggest_quick_shopping_groups_by_ingredient()
-    test_suggest_quick_shopping_max_missing()
-    test_suggest_quick_shopping_ranks_by_reach()
-    test_suggest_quick_shopping_prefers_cheapest_basket()
-    test_suggest_quick_shopping_score_matches_cheapest_unlock()
+        # Simulate delete_dish having removed the row.
+        repo.save([stew])
+        check("dish is gone before restore", [d.name for d in repo.load()] == ["stew"])
 
-    test_fridge_repository_counts()
-    test_fridge_repository_non_finite_counts()
+        check("restore reports it re-added the dish", repo.restore(paella) is True)
+        names = sorted(d.name for d in repo.load())
+        check("dish is back in the catalog", names == ["paella", "stew"], f"got {names}")
+        restored = next(d for d in repo.load() if d.name == "paella")
+        check("ingredients survive the round trip",
+              restored.ingredients == {"arroz": True, "azafran": False},
+              f"got {restored.ingredients}")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
 
-    test_expiry_status()
-    test_fridge_entries_grammar()
-    test_fridge_mutations_preserve_expiry()
-    test_normalize_ingredient_entries()
 
-    test_alias_repository()
+def test_dish_repo_restore_is_a_noop_when_present():
+    print("\n-- JsonDishRepository.restore (name already present) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_dish_"))
+    try:
+        repo = _repos_mod.JsonDishRepository(tmp / "dishes.json")
+        original = Dish(name="paella", ingredients={"arroz": True})
+        repo.save([original])
 
-    test_cooking_event_from_dict_strict()
-    test_history_projects_latest_per_dish()
-    test_history_older_event_cannot_rewind_the_cooldown()
-    test_history_retract_versus_delete()
-    test_history_legacy_migration()
-    test_history_corruption()
+        # A concurrent writer already put a same-named dish back, so the
+        # rollback must not fire and must not duplicate the row.
+        replacement = Dish(name="paella", ingredients={"arroz": True, "pollo": True})
+        check("restore declines when the name is present",
+              repo.restore(replacement) is False)
+        dishes = repo.load()
+        check("no duplicate row was written", len(dishes) == 1, f"got {len(dishes)}")
+        check("the stored dish is untouched",
+              dishes[0].ingredients == {"arroz": True}, f"got {dishes[0].ingredients}")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
 
-    test_normalize_ingredients_dict()
-    test_normalize_ingredients_list()
-    test_normalize_ingredients_json_string_dict()
-    test_normalize_ingredients_json_string_list()
-    test_normalize_ingredients_invalid()
-    test_normalize_ingredients_empty_rejected()
-    test_normalize_ingredients_dedup_under_limit()
-    test_normalize_ingredients_rejects_colliding_dict_keys()
-    test_normalize_ingredient_names()
 
-    test_reject_unknown_args()
-    test_tool_handler_validates_against_schema()
-    test_safe_error_message()
-    test_tool_handler_sanitizes_envelope()
+# ---------------------------------------------------------------------------
+# atomic_write_json tests
+# ---------------------------------------------------------------------------
 
-    test_tuning_initial_state()
-    test_tuning_deployed_weights_fallback()
-    test_tuning_deployed_weights_clamps_out_of_band()
-    test_tuning_validate_state()
-    test_tuning_validate_state_corruption_branches()
-    test_tuning_compute_rewards_not_cookable()
-    test_tuning_compute_rewards_single_dish()
-    test_tuning_compute_rewards_top_rank()
-    test_tuning_compute_rewards_uniform_skipped()
-    test_tuning_compute_rewards_no_signal()
-    test_tuning_apply_update_pure()
-    test_tuning_cold_start()
-    test_tuning_shift_after_warmup()
-    test_tuning_hysteresis()
+
+def test_atomic_write_json_cleans_up_on_failure():
+    print("\n-- atomic_write_json (cleanup on failure) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_atomic_"))
+    try:
+        target = tmp / "state.json"
+        target.write_text('{"kept": true}', encoding="utf-8")
+
+        try:
+            _src_mod.atomic_write_json(target, {"x": object()})
+            check("non-serializable payload raises", False, "no exception")
+        except TypeError:
+            check("non-serializable payload raises", True)
+
+        leftovers = [p.name for p in tmp.iterdir() if p.name.endswith(".tmp")]
+        check("no temp file is left behind", leftovers == [], f"got {leftovers}")
+        check("the pre-existing target is intact",
+              target.read_text(encoding="utf-8") == '{"kept": true}',
+              f"got {target.read_text(encoding='utf-8')!r}")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_atomic_write_json_replaces_existing():
+    print("\n-- atomic_write_json (happy path) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_atomic_"))
+    try:
+        target = tmp / "nested" / "state.json"
+        _src_mod.atomic_write_json(target, {"a": 1})
+        check("parent directory is created lazily", target.exists())
+        check("payload round-trips", json.loads(target.read_text(encoding="utf-8")) == {"a": 1})
+
+        _src_mod.atomic_write_json(target, {"b": 2})
+        check("target is replaced, not appended",
+              json.loads(target.read_text(encoding="utf-8")) == {"b": 2})
+        leftovers = [p.name for p in target.parent.iterdir() if p.name.endswith(".tmp")]
+        check("no temp file survives a successful write", leftovers == [], f"got {leftovers}")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# DataDirLock tests
+# ---------------------------------------------------------------------------
+
+
+def _lock_in_tmp(tmp):
+    return _filelock_mod.DataDirLock(tmp / ".lock")
+
+
+def test_data_lock_is_reentrant():
+    print("\n-- DataDirLock (reentrancy) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_lock_"))
+    try:
+        lock = _lock_in_tmp(tmp)
+        check("starts unheld", lock._depth == 0)
+        # Repository methods nest (save -> load_entries) and every repository
+        # shares this one object, so a non-reentrant lock would deadlock here.
+        with lock:
+            check("depth 1 after first acquire", lock._depth == 1)
+            with lock:
+                check("depth 2 after nested acquire", lock._depth == 2)
+                with lock:
+                    check("depth 3 after third acquire", lock._depth == 3)
+                check("depth unwinds to 2", lock._depth == 2)
+            check("depth unwinds to 1", lock._depth == 1)
+        check("depth unwinds to 0", lock._depth == 0)
+        check("file descriptor released", lock._fd is None)
+        check("lock file was created", (tmp / ".lock").exists())
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_data_lock_configure_rejects_while_held():
+    print("\n-- DataDirLock (configure while held) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_lock_"))
+    try:
+        lock = _lock_in_tmp(tmp)
+        with lock:
+            try:
+                lock.configure(tmp / "other.lock")
+                check("configure while held rejected", False, "no exception")
+            except RuntimeError:
+                check("configure while held rejected", True)
+            check("path unchanged after refusal", lock.path == tmp / ".lock")
+        lock.configure(tmp / "other.lock")
+        check("configure works once released", lock.path == tmp / "other.lock")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_data_lock_releases_on_exception():
+    print("\n-- DataDirLock (release on exception) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_lock_"))
+    try:
+        lock = _lock_in_tmp(tmp)
+        try:
+            with lock:
+                raise RuntimeError("boom")
+        except RuntimeError:
+            pass
+        check("depth back to 0 after an exception", lock._depth == 0)
+        check("fd released after an exception", lock._fd is None)
+        with lock:
+            check("a fresh acquisition still succeeds", lock._depth == 1)
+        check("and unwinds again", lock._depth == 0)
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+_CHILD_PROBE = """
+import fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o644)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    print("REFUSED")
+else:
+    print("ACQUIRED")
+"""
+
+
+def test_data_lock_excludes_another_process():
+    print("\n-- DataDirLock (cross-process exclusion) --")
+    if _filelock_mod.fcntl is None:
+        print("  SKIP  fcntl unavailable on this platform")
+        return
+    import shutil as _shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_lock_"))
+    try:
+        lock = _lock_in_tmp(tmp)
+        path = str(tmp / ".lock")
+
+        def probe():
+            # Non-blocking acquisition in the child, so it answers immediately
+            # and the test never has to sleep to coordinate.
+            done = subprocess.run(
+                [sys.executable, "-c", _CHILD_PROBE, path],
+                capture_output=True, text=True, timeout=30,
+            )
+            return done.stdout.strip()
+
+        with lock:
+            check("another process is refused while we hold it",
+                  probe() == "REFUSED", "child was not blocked")
+        check("another process acquires it once released",
+              probe() == "ACQUIRED", "child could not acquire after release")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_repositories_share_one_lock():
+    print("\n-- DataDirLock (shared across repositories) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    shared = _filelock_mod.data_lock
+    check("dish and fridge share one lock object",
+          _repos_mod.dish_repo.lock is _repos_mod.fridge_repo.lock)
+    check("tuning shares it too", _repos_mod.tuning_repo.lock is shared)
+    check("alias shares it too", _repos_mod.alias_repo.lock is shared)
+    check("history shares it too", _repos_mod.history_repo._lock is shared)
+
+    # configure() redirects the singletons globally, so put the paths back.
+    previous = _repos_mod.dish_repo.path.parent
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_lock_cfg_"))
+    try:
+        _repos_mod.configure(tmp)
+        check("configure moves the lock into the new data dir",
+              shared.path == tmp / ".lock", f"got {shared.path}")
+    finally:
+        _repos_mod.configure(previous)
+        _shutil.rmtree(tmp, ignore_errors=True)
+    check("configure restores the previous lock path",
+          shared.path == previous / ".lock", f"got {shared.path}")
+
+
+def _run_all():
+    run(test_dish_normalize_ingredient)
+    run(test_dish_normalize_name)
+    run(test_dish_can_cook_with)
+    run(test_dish_can_cook_with_no_ingredients)
+    run(test_dish_can_cook_with_only_optional)
+    run(test_dish_to_dict)
+    run(test_dish_from_dict)
+    run(test_dish_from_dict_invalid)
+    run(test_dish_add_ingredient)
+    run(test_dish_add_ingredient_validation)
+    run(test_dish_ingredient_keys_normalized_on_construction)
+    run(test_dish_rejects_colliding_ingredient_keys)
+    run(test_dish_instructions)
+
+    run(test_calculate_score_basic)
+    run(test_calculate_score_cooldown)
+    run(test_calculate_score_no_ingredients)
+    run(test_calculate_score_partial_ingredients)
+    run(test_calculate_score_declaring_optionals_never_penalizes)
+    run(test_calculate_score_match_depends_on_present_count_only)
+    run(test_calculate_score_recency_scaling)
+    run(test_score_components_agree_with_calculate_score)
+
+    run(test_suggest_dishes_basic)
+    run(test_suggest_dishes_excludes_recent)
+    run(test_suggest_dishes_default_recency)
+
+    run(test_suggest_quick_shopping_basic)
+    run(test_suggest_quick_shopping_two_missing)
+    run(test_suggest_quick_shopping_groups_by_ingredient)
+    run(test_suggest_quick_shopping_max_missing)
+    run(test_suggest_quick_shopping_ranks_by_reach)
+    run(test_suggest_quick_shopping_prefers_cheapest_basket)
+    run(test_suggest_quick_shopping_score_matches_cheapest_unlock)
+
+    run(test_fridge_repository_counts)
+    run(test_fridge_repository_non_finite_counts)
+
+    run(test_expiry_status)
+    run(test_fridge_entries_grammar)
+    run(test_fridge_mutations_preserve_expiry)
+    run(test_normalize_ingredient_entries)
+
+    run(test_alias_repository)
+
+    run(test_dish_repo_restore_adds_back)
+    run(test_dish_repo_restore_is_a_noop_when_present)
+
+    run(test_atomic_write_json_cleans_up_on_failure)
+    run(test_atomic_write_json_replaces_existing)
+
+    # -- DataDirLock --
+    run(test_data_lock_is_reentrant)
+    run(test_data_lock_configure_rejects_while_held)
+    run(test_data_lock_releases_on_exception)
+    run(test_data_lock_excludes_another_process)
+    run(test_repositories_share_one_lock)
+
+    run(test_cooking_event_from_dict_strict)
+    run(test_history_projects_latest_per_dish)
+    run(test_history_older_event_cannot_rewind_the_cooldown)
+    run(test_history_retract_versus_delete)
+    run(test_history_legacy_migration)
+    run(test_history_corruption)
+
+    run(test_normalize_ingredients_dict)
+    run(test_normalize_ingredients_list)
+    run(test_normalize_ingredients_json_string_dict)
+    run(test_normalize_ingredients_json_string_list)
+    run(test_normalize_ingredients_invalid)
+    run(test_normalize_ingredients_empty_rejected)
+    run(test_normalize_ingredients_dedup_under_limit)
+    run(test_normalize_ingredients_rejects_colliding_dict_keys)
+    run(test_normalize_ingredient_names)
+
+    run(test_reject_unknown_args)
+    run(test_tool_handler_validates_against_schema)
+    run(test_safe_error_message)
+    run(test_tool_handler_sanitizes_envelope)
+
+    run(test_tuning_initial_state)
+    run(test_tuning_deployed_weights_fallback)
+    run(test_tuning_deployed_weights_clamps_out_of_band)
+    run(test_tuning_validate_state)
+    run(test_tuning_validate_state_corruption_branches)
+    run(test_tuning_compute_rewards_not_cookable)
+    run(test_tuning_compute_rewards_single_dish)
+    run(test_tuning_compute_rewards_top_rank)
+    run(test_tuning_compute_rewards_uniform_skipped)
+    run(test_tuning_compute_rewards_no_signal)
+    run(test_tuning_apply_update_pure)
+    run(test_tuning_cold_start)
+    run(test_tuning_shift_after_warmup)
+    run(test_tuning_hysteresis)
 
     # Regression tests for the code-review findings.
-    test_dish_rejects_invalid_ingredient_values()
-    test_alias_repository_cache_invalidation()
-    test_tuning_deployed_weight_off_grid()
-    test_tuning_reward_denominator_uses_ranking_size()
+    run(test_dish_rejects_invalid_ingredient_values)
+    run(test_alias_repository_cache_invalidation)
+    run(test_tuning_deployed_weight_off_grid)
+    run(test_tuning_reward_denominator_uses_ranking_size)
+
+
+def main():
+    # Every repository shares one lock object, and its path is global state: a
+    # repository constructed against a tmp path still locks whatever data_lock
+    # currently points at. Without this redirect the tests that build their own
+    # repositories would create and flock <plugin_root>/data/.lock — and
+    # AGENTS.md is explicit that tests never touch the real data/.
+    original_data_dir = _repos_mod.dish_repo.path.parent
+    run_tmp = Path(tempfile.mkdtemp(prefix="mm_unit_"))
+    _repos_mod.configure(run_tmp)
+    try:
+        _run_all()
+    finally:
+        _repos_mod.configure(original_data_dir)
+        shutil.rmtree(run_tmp, ignore_errors=True)
 
     print(f"\n{'='*40}")
     print(f"  {_passed} passed, {_failed} failed")

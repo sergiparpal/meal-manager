@@ -7,7 +7,6 @@ engine (for state mutations) depend on this module.
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-
 # Sentinel used when last_activity is missing or malformed — guaranteed to
 # be older than any real TTL window.
 EPOCH_SENTINEL_ISO = "1970-01-01T00:00:00+00:00"

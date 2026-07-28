@@ -11,11 +11,11 @@ standard library and persists state in JSON files under `data/`.
 ## Fast Facts
 
 - Python 3.12+.
-- No third-party dependencies.
-- No build step is configured.
-- No lint step is configured.
-- Tests are plain Python scripts with assertions, not a pytest/unittest harness.
-- CI (`.github/workflows/tests.yml`) runs both test scripts on push to `main`, on pull requests, and on manual dispatch, across Python 3.12/3.13/3.14. It is the only automated gate — there is nothing else for it to run.
+- No third-party **runtime** dependencies. The plugin imports nothing outside the standard library, and nothing under `src/` or `__init__.py` may import a development tool. **Development/CI** tooling does exist and is pinned: `mypy==2.3.0`, `coverage==7.15.0`, and `ruff` (configured in `pyproject.toml`).
+- No build step is configured. `pyproject.toml` holds tool configuration only — deliberately no `[build-system]` table and no `[project]` metadata, because this plugin is loaded by path as `hermes_plugins.meal_manager` rather than installed as a distribution.
+- Lint is configured (`ruff`, narrow `F,B,I` selection) but is deliberately **not** a CI gate.
+- Tests are plain Python scripts with assertions, not a pytest/unittest harness. Register every test function in `main()` via `run(test_fn)`, never as a bare call: `run` records a raised exception as a failure so one mistake cannot abort every test after it.
+- CI (`.github/workflows/tests.yml`) runs on push to `main`, on pull requests, and on manual dispatch: a `tests` job (both scripts across Python 3.12/3.13/3.14), a `types` job (mypy), and a `coverage` job (`--fail-under=91`, a ratchet — raise it when coverage rises, never lower it to make a build pass). Any new job must be added to `ci-complete`'s `needs:` list; that job is the single required status check for the branch ruleset and it fails if a needed job is skipped, cancelled or failed. GitHub Actions are pinned to full commit SHAs with a trailing `# vX.Y.Z` comment.
 - Tools are auto-discovered: each module under `src/handlers/` exports `NAME`, `SCHEMA`, `HANDLER` and is picked up by `iter_tools()`. There is no central registry to keep in sync.
 - Relative imports are required inside the package.
 - Preserve the existing JSON data formats and tool names. Every format change on record follows the same courtesy — the loader accepts the old shape, migrates it in memory, and rewrites it on the next save, so no user ever runs a migration step:
@@ -131,9 +131,9 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 
 ## Concurrency
 
-- Each file-backed store singleton owns its own `threading.Lock` instance attribute (`self.lock` on the dish, fridge, alias, and tuning repos; `self._lock` on the history repo).
-- Hold the appropriate lock around load-modify-save sequences.
-- **Lock order is `alias -> dish -> fridge`.** Acquire them in that order and never the reverse. `src/dii/finalizer.py` is the only place that holds two repository locks at once (`with dish_repo.lock, fridge_repo.lock:`), so it is the constraint any future nesting has to agree with — every other multi-repo handler acquires and releases one lock at a time.
+- **All five file-backed stores share one lock object**: the `data_lock` singleton from `src/filelock.py`, an advisory `fcntl.flock` over `<data_dir>/.lock` that covers the whole data directory. It is assigned to the same attribute each repository already exposed (`self.lock` on the dish, fridge, alias, and tuning repos; `self._lock` on the history repo), so every existing call site is unchanged. It is reentrant, cross-process, and degrades to in-process-only where `fcntl` is unavailable.
+- Hold the appropriate lock around load-modify-save sequences. A bare load-modify-save is a bug even when each half is individually atomic.
+- **Lock order is `alias -> dish -> fridge`.** Acquire them in that order and never the reverse. `src/dii/finalizer.py` is the only place that holds two repository locks at once (`with dish_repo.lock, fridge_repo.lock:`), so it is the constraint any future nesting has to agree with — every other multi-repo handler acquires and releases one lock at a time. Since the locks are now one reentrant object, that ordering no longer risks deadlock, but keep it: it documents intent and survives any future move back to finer-grained locks.
 - **Normalize arguments before acquiring any repository lock.** `_common.normalize_ingredient_name` reads the alias map, so normalizing inside a `dish_repo.lock` / `fridge_repo.lock` block inverts the documented order. Every handler normalizes first, then locks.
 - DII sessions also use per-session locks plus a global lock for session maps. Always take a session lock through the `IngredientSessionStore.session_lock(session_id)` context manager, which reference-counts holders and prunes the entry itself. Never delete from `_locks` anywhere else: removing a lock does not release it, so a holder mid-critical-section and the next caller end up on different mutexes.
 - Do not bypass the locking helpers when changing persistence behavior.
