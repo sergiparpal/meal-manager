@@ -1578,6 +1578,113 @@ def test_tuning_compute_rewards_no_signal():
 
 
 # ---------------------------------------------------------------------------
+# Dish repository rollback tests
+# ---------------------------------------------------------------------------
+
+
+def test_dish_repo_restore_adds_back():
+    print("\n-- JsonDishRepository.restore (delta-rollback) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_dish_"))
+    try:
+        repo = _repos_mod.JsonDishRepository(tmp / "dishes.json")
+        paella = Dish(name="paella", ingredients={"arroz": True, "azafran": False})
+        stew = Dish(name="stew", ingredients={"beans": True})
+        repo.save([paella, stew])
+
+        # Simulate delete_dish having removed the row.
+        repo.save([stew])
+        check("dish is gone before restore", [d.name for d in repo.load()] == ["stew"])
+
+        check("restore reports it re-added the dish", repo.restore(paella) is True)
+        names = sorted(d.name for d in repo.load())
+        check("dish is back in the catalog", names == ["paella", "stew"], f"got {names}")
+        restored = next(d for d in repo.load() if d.name == "paella")
+        check("ingredients survive the round trip",
+              restored.ingredients == {"arroz": True, "azafran": False},
+              f"got {restored.ingredients}")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_dish_repo_restore_is_a_noop_when_present():
+    print("\n-- JsonDishRepository.restore (name already present) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_dish_"))
+    try:
+        repo = _repos_mod.JsonDishRepository(tmp / "dishes.json")
+        original = Dish(name="paella", ingredients={"arroz": True})
+        repo.save([original])
+
+        # A concurrent writer already put a same-named dish back, so the
+        # rollback must not fire and must not duplicate the row.
+        replacement = Dish(name="paella", ingredients={"arroz": True, "pollo": True})
+        check("restore declines when the name is present",
+              repo.restore(replacement) is False)
+        dishes = repo.load()
+        check("no duplicate row was written", len(dishes) == 1, f"got {len(dishes)}")
+        check("the stored dish is untouched",
+              dishes[0].ingredients == {"arroz": True}, f"got {dishes[0].ingredients}")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# atomic_write_json tests
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_write_json_cleans_up_on_failure():
+    print("\n-- atomic_write_json (cleanup on failure) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_atomic_"))
+    try:
+        target = tmp / "state.json"
+        target.write_text('{"kept": true}', encoding="utf-8")
+
+        try:
+            _src_mod.atomic_write_json(target, {"x": object()})
+            check("non-serializable payload raises", False, "no exception")
+        except TypeError:
+            check("non-serializable payload raises", True)
+
+        leftovers = [p.name for p in tmp.iterdir() if p.name.endswith(".tmp")]
+        check("no temp file is left behind", leftovers == [], f"got {leftovers}")
+        check("the pre-existing target is intact",
+              target.read_text(encoding="utf-8") == '{"kept": true}',
+              f"got {target.read_text(encoding='utf-8')!r}")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_atomic_write_json_replaces_existing():
+    print("\n-- atomic_write_json (happy path) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_atomic_"))
+    try:
+        target = tmp / "nested" / "state.json"
+        _src_mod.atomic_write_json(target, {"a": 1})
+        check("parent directory is created lazily", target.exists())
+        check("payload round-trips", json.loads(target.read_text(encoding="utf-8")) == {"a": 1})
+
+        _src_mod.atomic_write_json(target, {"b": 2})
+        check("target is replaced, not appended",
+              json.loads(target.read_text(encoding="utf-8")) == {"b": 2})
+        leftovers = [p.name for p in target.parent.iterdir() if p.name.endswith(".tmp")]
+        check("no temp file survives a successful write", leftovers == [], f"got {leftovers}")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # DataDirLock tests
 # ---------------------------------------------------------------------------
 
@@ -1770,6 +1877,12 @@ def main():
     run(test_normalize_ingredient_entries)
 
     run(test_alias_repository)
+
+    run(test_dish_repo_restore_adds_back)
+    run(test_dish_repo_restore_is_a_noop_when_present)
+
+    run(test_atomic_write_json_cleans_up_on_failure)
+    run(test_atomic_write_json_replaces_existing)
 
     # -- DataDirLock --
     run(test_data_lock_is_reentrant)

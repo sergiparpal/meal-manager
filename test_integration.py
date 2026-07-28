@@ -32,6 +32,7 @@ _repos_mod = importlib.import_module(".src.repositories", _PLUGIN_DIR.name)
 _dii_mod = importlib.import_module(".src.dii", _PLUGIN_DIR.name)
 _tuning_mod = importlib.import_module(".src.tuning", _PLUGIN_DIR.name)
 _handlers_common = importlib.import_module(".src.handlers._common", _PLUGIN_DIR.name)
+_handlers_pkg = importlib.import_module(".src.handlers", _PLUGIN_DIR.name)
 
 # ---------------------------------------------------------------------------
 # Tmp data directory lifecycle
@@ -1752,6 +1753,135 @@ def test_dish_load_preserves_malformed():
 
 
 # ---------------------------------------------------------------------------
+# Tool discovery and plugin wiring
+# ---------------------------------------------------------------------------
+
+def _public_handler_modules() -> set[str]:
+    """Module names under src/handlers/ that iter_tools() should pick up."""
+    handlers_dir = _PLUGIN_DIR / "src" / "handlers"
+    return {
+        p.stem for p in handlers_dir.glob("*.py")
+        if not p.stem.startswith("_")
+    }
+
+
+def test_iter_tools_discovers_every_handler():
+    print("\n-- iter_tools (auto-discovery) --")
+    tools = list(_handlers_pkg.iter_tools())
+    modules = _public_handler_modules()
+
+    # Count equality is the point: a module that fails to import, or that lost
+    # one of NAME/SCHEMA/HANDLER, is dropped with only a log line otherwise.
+    check("one tool per public handler module",
+          len(tools) == len(modules),
+          f"{len(tools)} tools vs {len(modules)} modules: "
+          f"{sorted(modules - {n for n, _, _ in tools})}")
+
+    names = [name for name, _, _ in tools]
+    check("every NAME is a non-empty string",
+          all(isinstance(n, str) and n.strip() for n in names))
+    check("every NAME is unique", len(set(names)) == len(names), f"got {names}")
+    check("module names match tool names", set(names) == modules,
+          f"symmetric difference: {set(names) ^ modules}")
+
+    check("every SCHEMA is a dict", all(isinstance(s, dict) for _, s, _ in tools))
+    bad_desc = [
+        n for n, s, _ in tools
+        if not isinstance(s.get("description"), str) or not s["description"].strip()
+    ]
+    check("every SCHEMA has a non-empty description", bad_desc == [], f"got {bad_desc}")
+    check("every HANDLER is callable", all(callable(h) for _, _, h in tools))
+    check("iteration order is alphabetical", names == sorted(names), f"got {names}")
+
+
+def test_plugin_yaml_matches_registered_tools():
+    print("\n-- plugin.yaml / iter_tools sync --")
+    # plugin.yaml is documented as manually synced with src/handlers/, so drift
+    # is a test failure rather than something discovered at load time. Parsed
+    # with the stdlib: the tools list is a simple block sequence and the repo
+    # has no runtime dependency on PyYAML.
+    text = (_PLUGIN_DIR / "plugin.yaml").read_text(encoding="utf-8")
+    declared: list[str] = []
+    in_list = False
+    for line in text.splitlines():
+        if line.startswith("provides_tools:"):
+            in_list = True
+            continue
+        if in_list:
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                declared.append(stripped[2:].strip())
+            elif stripped and not stripped.startswith("#"):
+                break  # next top-level key ends the sequence
+
+    check("the tools list was actually parsed", len(declared) > 0, f"got {declared}")
+    registered = {name for name, _, _ in _handlers_pkg.iter_tools()}
+    check("plugin.yaml declares exactly the registered tools",
+          set(declared) == registered,
+          f"only in yaml: {sorted(set(declared) - registered)}; "
+          f"only registered: {sorted(registered - set(declared))}")
+    check("no duplicate entries in plugin.yaml",
+          len(declared) == len(set(declared)), f"got {declared}")
+
+
+class _FakeCtx:
+    """Minimal stand-in for the Hermes plugin context."""
+
+    def __init__(self):
+        self.registered: list[tuple] = []
+        self.injected: list[str] = []
+
+    def register_tool(self, name, plugin, schema, handler):
+        self.registered.append((name, plugin, schema, handler))
+
+    def inject_message(self, text):
+        self.injected.append(text)
+
+
+def test_register_wires_every_tool():
+    print("\n-- register() (plugin entry point) --")
+    # register(data_dir=…) reconfigures the repository and DII singletons
+    # globally, so this must restore _TMP_DATA_DIR afterwards or every test
+    # that runs after it reads the wrong directory. It is placed late in
+    # main() for the same reason.
+    assert _TMP_DATA_DIR is not None
+    other = Path(tempfile.mkdtemp(prefix="meal_manager_register_"))
+    try:
+        ctx = _FakeCtx()
+        _pkg.register(ctx, data_dir=other)
+
+        expected = [name for name, _, _ in _handlers_pkg.iter_tools()]
+        got = [name for name, _, _, _ in ctx.registered]
+        check("one register_tool call per discovered tool",
+              got == expected, f"got {got}")
+        check("every registration names the plugin",
+              all(plugin == "meal_manager" for _, plugin, _, _ in ctx.registered))
+        check("schemas and handlers are passed through",
+              all(isinstance(s, dict) and callable(h)
+                  for _, _, s, h in ctx.registered))
+
+        skill_text = (_PLUGIN_DIR / "skill.md").read_text(encoding="utf-8")
+        check("skill.md was injected exactly once", len(ctx.injected) == 1)
+        check("the injected text is skill.md",
+              ctx.injected == [skill_text] if ctx.injected else False)
+
+        check("data_dir redirected the dish repository",
+              _repos_mod.dish_repo.path == other / "dishes.json",
+              f"got {_repos_mod.dish_repo.path}")
+        check("data_dir redirected the DII session directory",
+              _dii_mod._store.session_dir == other / "sessions",
+              f"got {_dii_mod._store.session_dir}")
+    finally:
+        _repos_mod.configure(_TMP_DATA_DIR)
+        _dii_mod.configure(_TMP_DATA_DIR / "sessions")
+        shutil.rmtree(other, ignore_errors=True)
+
+    check("configuration restored for the tests that follow",
+          _repos_mod.dish_repo.path == _TMP_DATA_DIR / "dishes.json",
+          f"got {_repos_mod.dish_repo.path}")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1855,6 +1985,14 @@ def main():
         run(test_merge_alias_clamps_out_of_band_count)
         run(test_init_session_rejects_bad_pre_select)
         run(test_history_unreadable_degrades_and_reports)
+
+        # Tool discovery and plugin wiring. Read-only against the catalog, but
+        # test_register_wires_every_tool reconfigures the repository and DII
+        # singletons globally and restores them in its own finally: — so it
+        # runs late, where a slip would damage the least.
+        run(test_iter_tools_discovers_every_handler)
+        run(test_plugin_yaml_matches_registered_tools)
+        run(test_register_wires_every_tool)
 
         # These overwrite dishes.json wholesale — keep them last.
         run(test_dii_session_id_traversal_rejected)
