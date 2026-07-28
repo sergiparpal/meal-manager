@@ -11,6 +11,7 @@ import copy
 import importlib
 import json
 import sys
+import traceback
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -59,6 +60,22 @@ def check(label: str, condition: bool, detail: str = ""):
         if detail:
             msg += f"  -- {detail}"
         print(msg)
+
+
+def run(test_fn):
+    """Run one test function, recording an exception as a failure.
+
+    An unguarded call means one raised exception aborts every test after it, so
+    a single mistake hides the rest of the suite. Catching here keeps the run
+    going and still fails the process via the _failed counter.
+    """
+    global _failed
+    try:
+        test_fn()
+    except Exception as exc:
+        _failed += 1
+        print(f"  FAIL  {test_fn.__name__} raised {type(exc).__name__}: {exc}")
+        traceback.print_exc()
 
 
 # ---------------------------------------------------------------------------
@@ -1559,93 +1576,93 @@ def test_tuning_compute_rewards_no_signal():
 
 
 def main():
-    test_dish_normalize_ingredient()
-    test_dish_normalize_name()
-    test_dish_can_cook_with()
-    test_dish_can_cook_with_no_ingredients()
-    test_dish_can_cook_with_only_optional()
-    test_dish_to_dict()
-    test_dish_from_dict()
-    test_dish_from_dict_invalid()
-    test_dish_add_ingredient()
-    test_dish_add_ingredient_validation()
-    test_dish_ingredient_keys_normalized_on_construction()
-    test_dish_rejects_colliding_ingredient_keys()
-    test_dish_instructions()
+    run(test_dish_normalize_ingredient)
+    run(test_dish_normalize_name)
+    run(test_dish_can_cook_with)
+    run(test_dish_can_cook_with_no_ingredients)
+    run(test_dish_can_cook_with_only_optional)
+    run(test_dish_to_dict)
+    run(test_dish_from_dict)
+    run(test_dish_from_dict_invalid)
+    run(test_dish_add_ingredient)
+    run(test_dish_add_ingredient_validation)
+    run(test_dish_ingredient_keys_normalized_on_construction)
+    run(test_dish_rejects_colliding_ingredient_keys)
+    run(test_dish_instructions)
 
-    test_calculate_score_basic()
-    test_calculate_score_cooldown()
-    test_calculate_score_no_ingredients()
-    test_calculate_score_partial_ingredients()
-    test_calculate_score_declaring_optionals_never_penalizes()
-    test_calculate_score_match_depends_on_present_count_only()
-    test_calculate_score_recency_scaling()
-    test_score_components_agree_with_calculate_score()
+    run(test_calculate_score_basic)
+    run(test_calculate_score_cooldown)
+    run(test_calculate_score_no_ingredients)
+    run(test_calculate_score_partial_ingredients)
+    run(test_calculate_score_declaring_optionals_never_penalizes)
+    run(test_calculate_score_match_depends_on_present_count_only)
+    run(test_calculate_score_recency_scaling)
+    run(test_score_components_agree_with_calculate_score)
 
-    test_suggest_dishes_basic()
-    test_suggest_dishes_excludes_recent()
-    test_suggest_dishes_default_recency()
+    run(test_suggest_dishes_basic)
+    run(test_suggest_dishes_excludes_recent)
+    run(test_suggest_dishes_default_recency)
 
-    test_suggest_quick_shopping_basic()
-    test_suggest_quick_shopping_two_missing()
-    test_suggest_quick_shopping_groups_by_ingredient()
-    test_suggest_quick_shopping_max_missing()
-    test_suggest_quick_shopping_ranks_by_reach()
-    test_suggest_quick_shopping_prefers_cheapest_basket()
-    test_suggest_quick_shopping_score_matches_cheapest_unlock()
+    run(test_suggest_quick_shopping_basic)
+    run(test_suggest_quick_shopping_two_missing)
+    run(test_suggest_quick_shopping_groups_by_ingredient)
+    run(test_suggest_quick_shopping_max_missing)
+    run(test_suggest_quick_shopping_ranks_by_reach)
+    run(test_suggest_quick_shopping_prefers_cheapest_basket)
+    run(test_suggest_quick_shopping_score_matches_cheapest_unlock)
 
-    test_fridge_repository_counts()
-    test_fridge_repository_non_finite_counts()
+    run(test_fridge_repository_counts)
+    run(test_fridge_repository_non_finite_counts)
 
-    test_expiry_status()
-    test_fridge_entries_grammar()
-    test_fridge_mutations_preserve_expiry()
-    test_normalize_ingredient_entries()
+    run(test_expiry_status)
+    run(test_fridge_entries_grammar)
+    run(test_fridge_mutations_preserve_expiry)
+    run(test_normalize_ingredient_entries)
 
-    test_alias_repository()
+    run(test_alias_repository)
 
-    test_cooking_event_from_dict_strict()
-    test_history_projects_latest_per_dish()
-    test_history_older_event_cannot_rewind_the_cooldown()
-    test_history_retract_versus_delete()
-    test_history_legacy_migration()
-    test_history_corruption()
+    run(test_cooking_event_from_dict_strict)
+    run(test_history_projects_latest_per_dish)
+    run(test_history_older_event_cannot_rewind_the_cooldown)
+    run(test_history_retract_versus_delete)
+    run(test_history_legacy_migration)
+    run(test_history_corruption)
 
-    test_normalize_ingredients_dict()
-    test_normalize_ingredients_list()
-    test_normalize_ingredients_json_string_dict()
-    test_normalize_ingredients_json_string_list()
-    test_normalize_ingredients_invalid()
-    test_normalize_ingredients_empty_rejected()
-    test_normalize_ingredients_dedup_under_limit()
-    test_normalize_ingredients_rejects_colliding_dict_keys()
-    test_normalize_ingredient_names()
+    run(test_normalize_ingredients_dict)
+    run(test_normalize_ingredients_list)
+    run(test_normalize_ingredients_json_string_dict)
+    run(test_normalize_ingredients_json_string_list)
+    run(test_normalize_ingredients_invalid)
+    run(test_normalize_ingredients_empty_rejected)
+    run(test_normalize_ingredients_dedup_under_limit)
+    run(test_normalize_ingredients_rejects_colliding_dict_keys)
+    run(test_normalize_ingredient_names)
 
-    test_reject_unknown_args()
-    test_tool_handler_validates_against_schema()
-    test_safe_error_message()
-    test_tool_handler_sanitizes_envelope()
+    run(test_reject_unknown_args)
+    run(test_tool_handler_validates_against_schema)
+    run(test_safe_error_message)
+    run(test_tool_handler_sanitizes_envelope)
 
-    test_tuning_initial_state()
-    test_tuning_deployed_weights_fallback()
-    test_tuning_deployed_weights_clamps_out_of_band()
-    test_tuning_validate_state()
-    test_tuning_validate_state_corruption_branches()
-    test_tuning_compute_rewards_not_cookable()
-    test_tuning_compute_rewards_single_dish()
-    test_tuning_compute_rewards_top_rank()
-    test_tuning_compute_rewards_uniform_skipped()
-    test_tuning_compute_rewards_no_signal()
-    test_tuning_apply_update_pure()
-    test_tuning_cold_start()
-    test_tuning_shift_after_warmup()
-    test_tuning_hysteresis()
+    run(test_tuning_initial_state)
+    run(test_tuning_deployed_weights_fallback)
+    run(test_tuning_deployed_weights_clamps_out_of_band)
+    run(test_tuning_validate_state)
+    run(test_tuning_validate_state_corruption_branches)
+    run(test_tuning_compute_rewards_not_cookable)
+    run(test_tuning_compute_rewards_single_dish)
+    run(test_tuning_compute_rewards_top_rank)
+    run(test_tuning_compute_rewards_uniform_skipped)
+    run(test_tuning_compute_rewards_no_signal)
+    run(test_tuning_apply_update_pure)
+    run(test_tuning_cold_start)
+    run(test_tuning_shift_after_warmup)
+    run(test_tuning_hysteresis)
 
     # Regression tests for the code-review findings.
-    test_dish_rejects_invalid_ingredient_values()
-    test_alias_repository_cache_invalidation()
-    test_tuning_deployed_weight_off_grid()
-    test_tuning_reward_denominator_uses_ranking_size()
+    run(test_dish_rejects_invalid_ingredient_values)
+    run(test_alias_repository_cache_invalidation)
+    run(test_tuning_deployed_weight_off_grid)
+    run(test_tuning_reward_denominator_uses_ranking_size)
 
     print(f"\n{'='*40}")
     print(f"  {_passed} passed, {_failed} failed")
