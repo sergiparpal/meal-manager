@@ -46,7 +46,8 @@ The result is a system that offers the user the freedom of conversation while gu
 | Layer | Technology |
 |---|---|
 | Language | Python 3.12+ |
-| Dependencies | None (standard library only) |
+| Runtime dependencies | None (standard library only) |
+| Development tooling | `mypy`, `ruff`, `coverage` — CI only, never imported by plugin code |
 | Data Storage | Local JSON files (`data/`) |
 | Architecture | Official Hermes plugin (`plugin.yaml` + `register(ctx)`) |
 | Data Modeling | Python `dataclasses` |
@@ -58,7 +59,7 @@ The result is a system that offers the user the freedom of conversation while gu
 ### Prerequisites
 
 - **Python 3.12** or newer installed on your system.
-- No package manager or virtual environment is required — the project has zero external dependencies.
+- No package manager or virtual environment is required to *run* the plugin — it has zero external runtime dependencies. (Contributors who want to run the type, lint, or coverage checks locally do need a virtualenv for those tools; see the CI section.)
 
 ### Installation
 
@@ -210,7 +211,14 @@ For the fastest feedback on pure domain logic, run `python3 test_unit.py`. It co
 
 ### Continuous Integration
 
-Both scripts also run in GitHub Actions ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) on every push to `main`, on every pull request, and on manual dispatch. The job runs on `ubuntu-latest` across a Python **3.12, 3.13, and 3.14** matrix — the project declares 3.12+, so the whole supported range is tested rather than just the floor, which is free to do with no dependencies to install. Each leg runs `test_unit.py` followed by `test_integration.py`, and `fail-fast` is off so one failing version does not hide the others.
+Both scripts also run in GitHub Actions ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) on every push to `main`, on every pull request, and on manual dispatch. The `tests` job runs on `ubuntu-latest` across a Python **3.12, 3.13, and 3.14** matrix — the project declares 3.12+, so the whole supported range is tested rather than just the floor, which is free to do with no runtime dependencies to install. Each leg runs `test_unit.py` followed by `test_integration.py`, and `fail-fast` is off so one failing version does not hide the others.
+
+Two further jobs run alongside it, both using development-only tools that the plugin itself never imports:
+
+- **`types`** — `mypy` over the whole package. The repository directory name contains a hyphen, which is not a valid Python package name, so the job symlinks the workspace under a valid one and points `MYPYPATH` at it.
+- **`coverage`** — both suites under `coverage`, gated at `--fail-under=91`. This is a ratchet against silent decay, not a target: raise it when coverage rises, never lower it to make a build pass.
+
+All three feed `ci-complete`, the single required status check — so any job added later must join its `needs:` list or it will not actually gate anything.
 
 ---
 
@@ -220,6 +228,7 @@ Both scripts also run in GitHub Actions ([`.github/workflows/tests.yml`](.github
 meal-manager/
 ├── src/
 │   ├── __init__.py            # Package marker + atomic_write_json helper
+│   ├── filelock.py            # Cross-process advisory lock over the whole data directory
 │   ├── dish.py                # Dish dataclass — recipe model (essential/optional ingredients)
 │   ├── suggestion.py          # Scoring engine — ranks dishes by availability + recency
 │   ├── shopping.py            # Shopping suggestions — near-miss unlock logic, cheapest basket first
@@ -278,7 +287,7 @@ meal-manager/
 │   └── sessions/              # (created lazily) DII session backups for crash recovery
 ├── .github/
 │   └── workflows/
-│       └── tests.yml          # CI — runs both test scripts on push, PR, and manual dispatch
+│       └── tests.yml          # CI — tests, types (mypy), and coverage jobs behind a ci-complete gate
 ├── plugin.yaml                # Hermes plugin manifest (name, version, provided tools)
 ├── __init__.py                # Plugin entry point — register(ctx, *, data_dir=None)
 ├── test_unit.py               # Unit tests for domain logic modules
