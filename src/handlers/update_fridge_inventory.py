@@ -50,7 +50,15 @@ SCHEMA = {
 }
 
 
+# Distinguishes "not in the fridge at all" from "in the fridge at zero". They
+# are different facts, and reporting a brand-new entry as "(0 -> 4)" read as a
+# correction to a stock level the user had told us about.
+_ABSENT = object()
+
+
 def _fmt(value):
+    if value is _ABSENT:
+        return "new"
     return "staple" if value is None else str(value)
 
 
@@ -104,8 +112,9 @@ def HANDLER(args: dict, **kwargs):
         for ing, spec in specs.items():
             count = spec["count"]
             existing = entries.get(ing)
-            before = existing["count"] if existing is not None else 0
+            before = existing["count"] if existing is not None else _ABSENT
             has_expiry = "expires_on" in spec
+            is_dated = False
 
             if action == "set":
                 new_count = count
@@ -119,7 +128,9 @@ def HANDLER(args: dict, **kwargs):
                     unchanged.append(ing)
                     continue
                 new_count = None
-                dated.append(ing)
+                is_dated = True
+            elif before is _ABSENT:
+                new_count = min(count, MAX_PORTION_COUNT)
             else:
                 # The input count is capped, but the running total was not, so
                 # two adds of the maximum stored well past it.
@@ -133,7 +144,12 @@ def HANDLER(args: dict, **kwargs):
                 expires_on = existing["expires_on"] if existing is not None else None
 
             entries[ing] = {"count": new_count, "expires_on": expires_on}
-            if ing not in dated:
+            if is_dated:
+                # A local flag, not a membership test against the accumulating
+                # ``dated`` list: the list only ever holds this iteration's name
+                # in that branch, so the scan was O(n^2) for no information.
+                dated.append(ing)
+            else:
                 changes.append((ing, before, new_count))
 
         if changes or dated:

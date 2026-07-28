@@ -72,15 +72,19 @@ def _require_active_session(session_id: str) -> DIISession:
 
 @contextmanager
 def _locked(session_id: str, *, active_only: bool = False):
-    """Validate, lock, then re-validate a session, yielding the live object.
+    """Lock a session, then validate it, yielding the live object.
 
-    Validating before taking the lock keeps a bad id from reaching the lock map
-    at all; re-validating inside is what actually guarantees the session is
-    still live and unfinalized for the whole mutation.
+    Validating *inside* the lock is what guarantees the session stays live and
+    unfinalized for the whole mutation, so it is the only check that carries
+    weight. There used to be a second, identical check before the lock, on the
+    grounds that it kept a bad id out of the lock map — but every DII call then
+    paid for two full ``_store.get()`` round-trips (global lock, TTL sweep,
+    possibly a disk read), and ``session_lock`` only ever mints a refcounted
+    dict entry that deletes itself when its last holder leaves. Validating the
+    id *format* up front is the part worth keeping, and it is a regex.
     """
     require = _require_active_session if active_only else _require_session
-    require(session_id)
-    with _store.session_lock(session_id):
+    with _store.session_lock(validate_session_id(session_id)):
         yield require(session_id)
 
 
@@ -174,9 +178,9 @@ def finalize_session(
     if not isinstance(commit_to_dish, bool):
         raise ValueError("commit_to_dish must be a boolean")
 
-    if _store.get(session_id) is None:
-        raise ValueError(f"Session not found or expired: {session_id}")
-    with _store.session_lock(session_id):
+    # One lookup, taken under the lock — the pre-lock probe this used to do was
+    # a second full ``_store.get()`` whose answer the locked one re-derived.
+    with _store.session_lock(validate_session_id(session_id)):
         session = _store.get(session_id)
         if session is None:
             raise ValueError(f"Session not found or expired: {session_id}")

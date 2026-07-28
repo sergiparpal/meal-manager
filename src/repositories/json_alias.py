@@ -64,7 +64,7 @@ class JsonAliasRepository:
 
     def _parse(self) -> dict[str, str]:
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
         except (json.JSONDecodeError, ValueError, OSError) as exc:
             logger.warning("Failed to load %s: %s", self.path.name, exc)

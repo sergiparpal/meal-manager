@@ -28,7 +28,7 @@ class JsonTuningRepository:
         if not self.path.exists():
             return tuning.initialize_state()
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(self.path, encoding="utf-8") as f:
                 raw = json.load(f)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             logger.warning("Failed to load %s: %s", self.path.name, exc)

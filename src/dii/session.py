@@ -64,16 +64,102 @@ def to_dict(session: DIISession) -> dict:
     }
 
 
+def _clean_names(raw, *, label: str) -> list[str]:
+    """Normalize a stored ingredient list, dropping repeats (first wins)."""
+    if not isinstance(raw, list):
+        raise ValueError(f"{label} must be a list")
+    names: list[str] = []
+    for value in raw:
+        if not isinstance(value, str):
+            raise ValueError(f"{label} must contain strings")
+        name = value.strip().lower()
+        if not name:
+            raise ValueError(f"{label} cannot contain an empty name")
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _clean_queue_item(raw) -> dict:
+    """Normalize one funnel entry, guaranteeing the keys the engine indexes.
+
+    ``engine.add_manual`` and ``engine.add_suggested`` read ``item["ingredient"]``
+    directly. Restoring a backup without checking meant a hand-edited or
+    older-format file could hand them an entry with no such key, and the bare
+    KeyError surfaced to the user as ``{"error": "'ingredient'"}``.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("queue entries must be objects")
+    ingredient = raw.get("ingredient")
+    if not isinstance(ingredient, str) or not ingredient.strip():
+        raise ValueError("queue entries must carry a non-empty 'ingredient'")
+    is_essential = raw.get("is_essential", True)
+    if not isinstance(is_essential, bool):
+        raise ValueError("queue entry 'is_essential' must be a boolean")
+    return {
+        **raw,
+        "ingredient": ingredient.strip().lower(),
+        "is_essential": is_essential,
+    }
+
+
+def _clean_flag(raw, *, label: str) -> bool:
+    if not isinstance(raw, bool):
+        raise ValueError(f"{label} must be a boolean")
+    return raw
+
+
 def from_dict(data: dict) -> DIISession:
+    """Rebuild a session from its JSON backup, validating as it goes.
+
+    Restoring blindly let a hand-edited or older-format backup carry the same
+    ingredient in *both* selected lists, and the finalizer's map union then
+    resolved the collision as optional — demoting an essential and letting
+    ``can_cook_with`` approve a dish the user cannot actually make. The lists
+    are mutually exclusive by design, so the collision is resolved here the
+    same way ``merge_ingredient_alias`` resolves it: essential wins.
+
+    Raising is the intended outcome for a shape we cannot trust — the store
+    treats it as a corrupt backup and removes the file.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("session backup must be an object")
+
+    session_id = data["session_id"]
+    dish_name = data["dish_name"]
+    if not isinstance(session_id, str) or not isinstance(dish_name, str):
+        raise ValueError("session_id and dish_name must be strings")
+
+    essential = _clean_names(
+        data.get("essential_ingredients", []), label="essential_ingredients"
+    )
+    optional = [
+        name
+        for name in _clean_names(
+            data.get("optional_ingredients", []), label="optional_ingredients"
+        )
+        if name not in essential
+    ]
+
+    raw_queue = data.get("hidden_queue", [])
+    if not isinstance(raw_queue, list):
+        raise ValueError("hidden_queue must be a list")
+
+    raw_suggestion = data.get("current_suggestion")
+
     return DIISession(
-        session_id=data["session_id"],
-        dish_name=data["dish_name"],
-        essential_ingredients=data.get("essential_ingredients", []),
-        optional_ingredients=data.get("optional_ingredients", []),
-        hidden_queue=data.get("hidden_queue", []),
-        current_suggestion=data.get("current_suggestion"),
+        session_id=session_id,
+        dish_name=dish_name.strip().lower(),
+        essential_ingredients=essential,
+        optional_ingredients=optional,
+        hidden_queue=[_clean_queue_item(item) for item in raw_queue],
+        current_suggestion=(
+            None if raw_suggestion is None else _clean_queue_item(raw_suggestion)
+        ),
         created_at=data.get("created_at", ""),
         last_activity=data.get("last_activity", ""),
-        finalized=data.get("finalized", False),
-        pending_recalculation=data.get("pending_recalculation", False),
+        finalized=_clean_flag(data.get("finalized", False), label="finalized"),
+        pending_recalculation=_clean_flag(
+            data.get("pending_recalculation", False), label="pending_recalculation"
+        ),
     )

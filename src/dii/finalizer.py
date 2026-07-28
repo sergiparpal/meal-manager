@@ -32,24 +32,32 @@ def commit(
     On a dish-write failure, rolls back only the items this call appended to
     the fridge — never clobbers concurrent writers.
     """
-    all_ingredients = session.essential_ingredients + session.optional_ingredients
-    ingredient_map: dict[str, bool] = (
-        {ing: True for ing in session.essential_ingredients}
-        | {ing: False for ing in session.optional_ingredients}
+    # Essential wins where a name appears in both lists. The engine keeps them
+    # mutually exclusive, but a session restored from a hand-edited backup need
+    # not be, and a dict union resolved that collision the other way — silently
+    # demoting an essential so ``can_cook_with`` would approve a dish the user
+    # cannot make. Same rule, same reason, as ``merge_ingredient_alias``.
+    ingredient_map: dict[str, bool] = dict.fromkeys(
+        session.essential_ingredients, True
     )
+    for ing in session.optional_ingredients:
+        ingredient_map.setdefault(ing, False)
+    all_ingredients = list(ingredient_map)
     committed_fridge = False
     committed_dish = False
 
-    # Both locks are held across the whole commit so that, on a dish-write
-    # failure, the rollback undoes exactly this call's fridge additions with no
-    # concurrent writer able to interleave (which a release-then-remove rollback
-    # could otherwise clobber).
+    # One lock is held across the whole commit so that, on a dish-write failure,
+    # the rollback undoes exactly this call's fridge additions with no concurrent
+    # writer able to interleave (which a release-then-remove rollback could
+    # otherwise clobber).
     #
-    # They are taken dish-before-fridge to match the documented ``alias -> dish
-    # -> fridge`` order. This is the only place in the package that holds two
-    # repository locks at once — every other multi-repo handler acquires and
-    # releases them one at a time — so the order here is what any future nesting
-    # has to agree with. Inverting it deadlocks.
+    # ``dish_repo.lock`` and ``fridge_repo.lock`` are the *same object* — every
+    # repository shares the one reentrant ``DataDirLock`` over the whole data
+    # directory (see ``src/filelock.py``), so this nests one lock rather than
+    # ordering two. Both are named anyway to say which repositories the critical
+    # section covers, and so the code stays correct if the lock is ever split
+    # per file. If it is split, this is the site that fixes the acquisition
+    # order for the rest of the package.
     with dish_repo.lock, fridge_repo.lock:
         added_to_fridge: list[str] = []
         if commit_to_fridge and all_ingredients:
@@ -87,9 +95,11 @@ def commit(
         except Exception:
             if added_to_fridge:
                 try:
-                    remove = set(added_to_fridge)
-                    fridge = fridge_repo.load()
-                    fridge_repo.save({k: v for k, v in fridge.items() if k not in remove})
+                    # ``remove_items`` is the delta rollback: it drops exactly
+                    # these keys. The previous load-filter-save rewrote the whole
+                    # inventory from a snapshot, which only stayed correct
+                    # because it ran under this lock.
+                    fridge_repo.remove_items(added_to_fridge)
                 except Exception:
                     logger.exception("finalize_session fridge rollback failed")
             raise

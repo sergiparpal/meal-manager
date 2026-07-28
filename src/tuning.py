@@ -114,10 +114,23 @@ def validate_state(raw) -> dict:
         return initialize_state()
 
     expected_keys = {_key(w) for w in CANDIDATES}
-    try:
-        got_keys = {_key(w) for w in candidates if isinstance(w, (int, float))}
-    except (TypeError, ValueError):
-        return initialize_state()
+    # Every candidate is arithmetic input: ``select_deployed`` compares it
+    # against BAND and ``compute_rewards`` blends with it. Filtering the
+    # non-numeric entries out of this check instead of rejecting them let a
+    # list that merely *contained* the right values validate, and the junk then
+    # raised a TypeError deep inside select_deployed — swallowed by the cook
+    # handler's best-effort guard, so the learner froze silently and forever.
+    # Duplicates collapse in a set the same way, so they are rejected here too.
+    got_keys: set[str] = set()
+    for w in candidates:
+        if not isinstance(w, (int, float)) or isinstance(w, bool):
+            return initialize_state()
+        if not math.isfinite(w):
+            return initialize_state()
+        key = _key(w)
+        if key in got_keys:
+            return initialize_state()
+        got_keys.add(key)
     if got_keys != expected_keys:
         return initialize_state()
     if set(S.keys()) != expected_keys or set(C.keys()) != expected_keys:

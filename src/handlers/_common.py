@@ -9,7 +9,8 @@ import json
 import logging
 from datetime import date
 
-from ..dish import Dish
+from ..dish import clean_label
+from ..filelock import DataLockTimeout
 from ..repositories import alias_repo, history_repo
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,12 @@ def _safe_error_message(exc: BaseException) -> str:
     # would never match.
     if isinstance(exc, json.JSONDecodeError):
         return "Stored data could not be read"
+    # DataLockTimeout is a TimeoutError and therefore an OSError, so it too has
+    # to be tested before the generic OSError branch. Its message is written
+    # for the user and carries no path, and "the data is busy" is far more
+    # actionable than "storage is temporarily unavailable".
+    if isinstance(exc, DataLockTimeout):
+        return str(exc)
     if isinstance(exc, (ValueError, LookupError)):
         return str(exc)
     if isinstance(exc, OSError):
@@ -145,7 +152,7 @@ def maybe_parse_json_arg(value):
 
 
 def _normalize_label(value: str, *, label: str) -> str:
-    normalized = Dish._clean(value, label=label.lower())
+    normalized = clean_label(value, label=label.lower())
     if not normalized:
         raise ValueError(f"{label} cannot be empty")
     if len(normalized) > MAX_NAME_LEN:
@@ -164,9 +171,11 @@ def normalize_ingredient_name(name: str) -> str:
     in ``Dish.normalize_ingredient``: the domain layer stays pure and I/O-free.
     That asymmetry is intentional — do not "fix" it by pushing the lookup down.
 
-    Because this reads the alias map, handlers must normalize their arguments
-    **before** acquiring any repository lock. The lock order is
-    ``alias -> dish -> fridge``.
+    Because this reads the alias map, handlers normalize their arguments
+    **before** entering their data-lock window. Not for lock ordering — every
+    repository shares one reentrant lock over the whole data directory, so
+    there is no order to get wrong — but to keep the exclusive window down to
+    the work that actually mutates state.
     """
     return alias_repo.resolve(_normalize_label(name, label="Ingredient name"))
 

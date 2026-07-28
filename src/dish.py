@@ -3,6 +3,20 @@ from dataclasses import dataclass, field
 MAX_INSTRUCTIONS_LENGTH = 20_000
 
 
+def clean_label(value, *, label: str) -> str:
+    """Strip and lowercase *value*, rejecting anything that is not a string.
+
+    Module-level and public because the tool boundary needs the same rule:
+    ``handlers/_common._normalize_label`` layers a non-empty check and a length
+    cap on top of it. That helper used to reach into ``Dish._clean``, which was
+    the only place in the package where one layer touched another's private
+    API. The rule itself belongs to neither layer, so it lives out here.
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a string, got {type(value).__name__}")
+    return value.strip().lower()
+
+
 @dataclass
 class Dish:
     """Recipe model.
@@ -50,18 +64,12 @@ class Dish:
             self.ingredients = normalized
 
     @staticmethod
-    def _clean(value, *, label):
-        if not isinstance(value, str):
-            raise ValueError(f"{label} must be a string, got {type(value).__name__}")
-        return value.strip().lower()
-
-    @staticmethod
     def normalize_ingredient(name):
-        return Dish._clean(name, label="ingredient name")
+        return clean_label(name, label="ingredient name")
 
     @staticmethod
     def normalize_name(name):
-        return Dish._clean(name, label="dish name")
+        return clean_label(name, label="dish name")
 
     @staticmethod
     def normalize_instructions(value):

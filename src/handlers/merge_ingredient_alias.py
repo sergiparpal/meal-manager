@@ -1,5 +1,6 @@
 """Tool: merge_ingredient_alias — collapse two spellings of one ingredient."""
 
+from .. import data_lock
 from ..repositories import alias_repo, dish_repo, fridge_repo
 from ._common import (
     MAX_PORTION_COUNT,
@@ -36,11 +37,26 @@ SCHEMA = {
 }
 
 
+def _merge_expiry(from_expiry, to_expiry):
+    """Earliest known date wins; an absent date means unknown, not "never".
+
+    Merging through the count-only view dropped the retired name's date
+    entirely, so collapsing the only stocked spelling onto a canonical name
+    that was not in the fridge silently lost an expiry the user had recorded.
+    Canonical ISO dates sort chronologically, so ``min`` is the earliest — the
+    conservative choice, since the merged entry should warn on whichever batch
+    goes off first.
+    """
+    known = [value for value in (from_expiry, to_expiry) if value is not None]
+    return min(known) if known else None
+
+
 @tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
-    # Normalize before taking any lock — this reads the alias map, and the
-    # lock order is alias -> dish -> fridge. Resolving `to_name` here also
-    # means merging onto an already-aliased name lands on its canonical form.
+    # Normalize before entering the data-lock window: this reads the alias map,
+    # and the window should cover only the mutations. Resolving `to_name` here
+    # also means merging onto an already-aliased name lands on its canonical
+    # form.
     from_name = normalize_ingredient_name(require_arg(args, "from_name"))
     to_name = normalize_ingredient_name(require_arg(args, "to_name"))
 
@@ -50,7 +66,15 @@ def HANDLER(args: dict, **kwargs):
         )
 
     dishes_updated = []
-    with dish_repo.lock:
+    fridge_merged = False
+    resulting_count = None
+    resulting_expiry = None
+
+    # One exclusive window over the catalog, the fridge and the alias map. The
+    # lock is the same reentrant object for all three, so nesting is free — and
+    # a merge that rewrote the catalog, then let another process interleave
+    # before the fridge caught up, was observable as half-merged data.
+    with data_lock:
         dishes = dish_repo.load()
         for dish in dishes:
             if from_name not in dish.ingredients:
@@ -66,14 +90,15 @@ def HANDLER(args: dict, **kwargs):
         if dishes_updated:
             dish_repo.save(dishes)
 
-    fridge_merged = False
-    resulting_count = None
-    with fridge_repo.lock:
-        fridge = fridge_repo.load()
-        if from_name in fridge:
-            from_count = fridge.pop(from_name)
-            if to_name in fridge:
-                to_count = fridge[to_name]
+        # The entries view, not the count-only one: the merge has to decide what
+        # happens to both expiry dates rather than discard them by omission.
+        entries = fridge_repo.load_entries()
+        if from_name in entries:
+            from_entry = entries.pop(from_name)
+            to_entry = entries.get(to_name)
+            from_count = from_entry["count"]
+            if to_entry is not None:
+                to_count = to_entry["count"]
                 if from_count is None or to_count is None:
                     resulting_count = None  # a staple never runs out
                 else:
@@ -84,17 +109,25 @@ def HANDLER(args: dict, **kwargs):
             # let a single hand-edited out-of-band count survive the merge.
             if resulting_count is not None:
                 resulting_count = min(resulting_count, MAX_PORTION_COUNT)
-            fridge[to_name] = resulting_count
-            fridge_repo.save(fridge)
+            resulting_expiry = _merge_expiry(
+                from_entry["expires_on"],
+                to_entry["expires_on"] if to_entry is not None else None,
+            )
+            entries[to_name] = {
+                "count": resulting_count,
+                "expires_on": resulting_expiry,
+            }
+            fridge_repo.save_entries(entries)
             fridge_merged = True
-        elif to_name in fridge:
-            resulting_count = fridge[to_name]
+        elif to_name in entries:
+            resulting_count = entries[to_name]["count"]
+            resulting_expiry = entries[to_name]["expires_on"]
 
-    # Recorded last on purpose. If a step above fails, the alias is absent and
-    # the whole operation is safely repeatable; recording it first would
-    # canonicalize `from_name` away and turn the retry into a no-op that
-    # silently leaves half-merged data behind.
-    alias_repo.add(from_name, to_name)
+        # Recorded last on purpose. If a step above fails, the alias is absent
+        # and the whole operation is safely repeatable; recording it first would
+        # canonicalize `from_name` away and turn the retry into a no-op that
+        # silently leaves half-merged data behind.
+        alias_repo.add(from_name, to_name)
 
     return {
         "from": from_name,
@@ -102,4 +135,5 @@ def HANDLER(args: dict, **kwargs):
         "dishes_updated": sorted(set(dishes_updated)),
         "fridge_merged": fridge_merged,
         "resulting_count": resulting_count,
+        "resulting_expiry": resulting_expiry,
     }

@@ -226,9 +226,11 @@ class IngredientSessionStore:
 
         # Also clean orphaned files on disk (cap iterations to avoid slow scans).
         if self.session_dir.exists():
-            for i, fpath in enumerate(self.session_dir.glob("*.json")):
-                if i >= ORPHAN_SCAN_LIMIT:
-                    break
+            # Oldest first. Taking whatever order glob happened to yield meant
+            # that past ORPHAN_SCAN_LIMIT files the tail was never examined —
+            # and the tail is where the stale backups are. Sorting by mtime
+            # points the capped budget at the files most likely to be expired.
+            for fpath in self._sweep_candidates():
                 try:
                     data = json.loads(fpath.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, ValueError):
@@ -247,3 +249,20 @@ class IngredientSessionStore:
                 last = parse_iso_to_aware(data.get("last_activity"))
                 if last < cutoff:
                     fpath.unlink(missing_ok=True)
+
+    def _sweep_candidates(self) -> list[Path]:
+        """The oldest ``ORPHAN_SCAN_LIMIT`` session backups, oldest first."""
+        def mtime(path: Path) -> float:
+            try:
+                return path.stat().st_mtime
+            except OSError:
+                # Vanished mid-scan (or unreadable): sort it first so the sweep
+                # deals with it now rather than carrying it forever.
+                return 0.0
+
+        try:
+            paths = list(self.session_dir.glob("*.json"))
+        except OSError:
+            return []
+        paths.sort(key=mtime)
+        return paths[:ORPHAN_SCAN_LIMIT]
