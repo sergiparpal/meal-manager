@@ -143,7 +143,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 
 ## Domain Rules
 
-- Ingredient and dish names are normalized with `strip().lower()` semantics. The normalization rule lives in `Dish._clean(value, *, label)` and is applied via `Dish.normalize_name` / `Dish.normalize_ingredient` (and the `_common.normalize_*` wrappers that add length validation).
+- Ingredient and dish names are normalized with `strip().lower()` semantics. The rule lives in the module-level `dish.clean_label(value, *, label)` and is applied via `Dish.normalize_name` / `Dish.normalize_ingredient` (and the `_common.normalize_*` wrappers that add the non-empty and length checks). It is public and lives outside the `Dish` class on purpose: the tool boundary needs the same rule, and `_common._normalize_label` reaching into a `Dish._clean` was the only place one layer touched another's private API.
 - `Dish.__post_init__` enforces that `Dish.name` is always stored normalized, so downstream consumers compare `dish.name == name` directly — do not add defensive `.strip().lower()` at call sites.
 - Cooking history keys are normalized to lowercase on load, so `history.json` comparisons are case-insensitive.
 - `Dish.ingredients` maps ingredient name to `bool`.

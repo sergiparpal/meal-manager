@@ -71,8 +71,10 @@ def _canonical_ingredients(ingredients, is_essential) -> list[str]:
     straight back into the catalog and the fridge, recreating the duplicate the
     merge existed to remove.
 
-    Runs before any repository lock is taken, as the ``alias -> dish -> fridge``
-    lock order requires.
+    Runs before any repository lock is taken. Not for lock ordering — every
+    repository shares one reentrant lock over the whole data directory, so
+    there is no order to get wrong — but because this reads the alias map, and
+    the exclusive window should cover only the work that mutates state.
     """
     if not isinstance(ingredients, list) or not isinstance(is_essential, list):
         raise ValueError("ingredients and is_essential must be arrays")
