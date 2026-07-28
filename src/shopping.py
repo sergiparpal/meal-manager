@@ -1,3 +1,5 @@
+from typing import Any
+
 from .suggestion import (
     DEFAULT_MATCH_WEIGHT,
     DEFAULT_TIME_WEIGHT,
@@ -10,7 +12,10 @@ def suggest_quick_shopping(dishes, available_ingredients, days_since_last,
                            match_weight=DEFAULT_MATCH_WEIGHT,
                            time_weight=DEFAULT_TIME_WEIGHT,
                            max_missing=1):
-    best_by_ingredient = {}
+    # ingredient name -> {"dishes": set[str], "still_missing": int, "score": float}.
+    # The values are heterogeneous, so the inner mapping stays loose rather than
+    # pulling in a TypedDict for three keys used in one function.
+    best_by_ingredient: dict[str, dict[str, Any]] = {}
 
     for dish in dishes:
         missing_essentials = [
