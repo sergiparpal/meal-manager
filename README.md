@@ -102,7 +102,7 @@ Example phrases and what the agent will do behind the scenes:
 
 **Shopping**
 
-- *"I'm heading to the grocery store, what should I buy?"* — lists the ingredients that unlock the most dishes, highest-leverage first.
+- *"I'm heading to the grocery store, what should I buy?"* — lists the ingredients that unlock new dishes, cheapest real unlock first.
 - *"I bought onions, peppers, and chicken."* — updates the fridge and proposes new meal ideas with what you have now.
 - *"We ran out of milk."* — marks it out of stock in the fridge inventory.
 - *"Can I make lasagne tonight?"* — reports exactly what that dish is still missing.
@@ -284,17 +284,18 @@ meal-manager/
 │   ├── history.json           # Cooking history (append-only log of cook events)
 │   ├── aliases.json           # (created lazily) Ingredient aliases (alias → canonical)
 │   ├── tuning.json            # (created lazily) Online-learner state for the suggestion blend
-│   └── sessions/              # (created lazily) DII session backups for crash recovery
+│   ├── sessions/              # (created lazily) DII session backups for crash recovery
+│   └── .lock                  # (created lazily) Advisory cross-process lock for the whole data directory
 ├── .github/
 │   └── workflows/
 │       └── tests.yml          # CI — tests, types (mypy), and coverage jobs behind a ci-complete gate
 ├── plugin.yaml                # Hermes plugin manifest (name, version, provided tools)
+├── pyproject.toml             # Tool configuration only (mypy, ruff, coverage) — no [project] table
 ├── __init__.py                # Plugin entry point — register(ctx, *, data_dir=None)
 ├── test_unit.py               # Unit tests for domain logic modules
 ├── test_integration.py        # Integration smoke test
 ├── skill.md                   # Prompt instructions defining when/how to call each tool
 ├── AGENTS.md                  # Repository guidance for agentic coding work
-├── IMPLEMENTATION_PLAN.md     # Historical record of the tier 1–3 fork adoption (complete)
 ├── CLAUDE.md                  # Development guidelines for Claude Code
 ├── LICENSE                    # GPLv3 license text
 └── README.md                  # This file — project overview and usage guide

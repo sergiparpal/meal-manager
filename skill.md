@@ -29,10 +29,12 @@ Read-only. Reports the current self-adjusted suggestion weights (availability vs
 Identifies ingredients that, when purchased, unlock new dishes. Each row returns:
 
 - `missing_ingredient` — the item to buy.
-- `unlocks_dishes` — comma-separated list of every dish it unlocks.
-- `unlocks_count` — how many dishes name this ingredient. Note this is reach, not unlocks-on-its-own: a high count with `still_missing: 3` means three dishes want it and none of them is close.
 - `still_missing` — the size of the smallest basket that unlocks a dish through this ingredient. `1` means buying this item alone is enough; `2` or more means it is part of a multi-item basket and buying it by itself unlocks nothing yet. **Always tell the user which case they are in** — never present a multi-item unlock as a one-item unlock.
-- `score` — the projected suggestion score of the dish behind `still_missing`, i.e. the meal that basket actually buys.
+- `unlocks_dishes` — comma-separated list of the dishes that basket reaches.
+- `unlocks_count` — how many dishes are in `unlocks_dishes`.
+- `score` — the projected suggestion score of the best dish in `unlocks_dishes`.
+
+**Every field on a row describes the same basket** — the one sized by `still_missing`. A row never advertises a meal its own basket cannot buy, so "buy this, it unlocks 3 dishes" is safe to say when `still_missing` is `1` and `unlocks_count` is `3`. A dish that is only reachable from a pricier basket does not inflate this row; it surfaces on its own terms, through the other ingredients that basket needs, at its true size.
 
 Rows are ranked by `still_missing` first, so genuine one-item unlocks lead, then by `unlocks_count`, then by `score`. The top row is the cheapest real path to a meal.
 
@@ -102,7 +104,7 @@ Lists recorded cook events, most recent first. Each row carries the dish, the da
 
 Declares that two ingredient names mean the same thing and merges them. Rewrites every recipe and the fridge to use the canonical name, then remembers the alias so anything typed later canonicalizes itself. Takes `from_name` (the spelling to retire) and `to_name` (the one to keep).
 
-Where a recipe listed both, essential wins over optional. Where the fridge held both, the counts add up (clamped at the 99-portion ceiling) and a pantry staple wins over any number.
+Where a recipe listed both, essential wins over optional. Where the fridge held both, the counts add up (clamped at the 99-portion ceiling) and a pantry staple wins over any number. If either entry carried an expiry date, the earlier of the two carries over and comes back as `resulting_expiry` — a date the user recorded is never lost to a merge.
 
 - **When to use:**
   - The user says two entries are the same thing ("tomate and tomates are the same", "that's just what I call olive oil").
