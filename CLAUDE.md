@@ -140,3 +140,13 @@ The data directory is injectable via `src.repositories.configure(data_dir)` — 
 - **DII session lifecycle**: `init_ingredient_session` → manipulate via add/skip/remove/manual/clear tools → `finalize_ingredient_session` commits to fridge and/or dish catalog. Sessions are in-memory with optional JSON persistence under `data/sessions/`.
 - **Relative imports throughout**: All internal imports use relative form (e.g. `from .src.repositories import dish_repo`, `from .dish import ...`) because Hermes loads the plugin as `hermes_plugins.meal_manager`. Absolute imports like `from src.xxx` would fail at runtime. The test files (`test_integration.py` and `test_unit.py`) bootstrap the package via `importlib` to make relative imports work when running standalone.
 - **Injectable data directory**: `src/repositories/__init__.py:configure(data_dir)` and `src/dii/__init__.py:configure(session_dir)` mutate the singleton `path`/`session_dir` attributes in place. The top-level `register(ctx, *, data_dir=None)` wires both. `test_integration.py` uses this to point the whole plugin at a `tempfile.mkdtemp()` directory, so the real `data/` is never touched during tests and no backup/restore dance is needed.
+
+## Git workflow
+
+`main` is protected by a branch ruleset: **direct pushes are rejected**, and merging requires the `ci-complete` status check to pass. So the loop is: branch, push, open a PR, let CI go green, merge. Review approvals are **not** required (the count is 0), so a solo change is still a one-person operation — the gate is CI, not a second pair of eyes.
+
+`ci-complete` (`.github/workflows/tests.yml`) is a single aggregating job that fails unless `tests`, `types`, and `coverage` all succeeded. **Any new job must be added to its `needs:` list**, or it silently stops gating anything. The ruleset requires that one stable name rather than the individual matrix legs on purpose: a dropped Python version would otherwise become a required check that never reports again and blocks every merge permanently.
+
+GitHub Actions are pinned to **full commit SHAs** with a trailing `# vX.Y.Z` comment, never to tags — a tag can be repointed by its upstream owner, a commit SHA cannot. Keep new `uses:` lines pinned the same way.
+
+This convention is shared across all six plugin repositories in this account.
