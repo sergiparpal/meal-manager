@@ -6,9 +6,20 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The default token is already read-only at the repository level; declaring it here as well
+# keeps the guarantee visible in the file and survives a change to that repository setting.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       # AGENTS.md declares "Python 3.12+", so test the whole supported range
@@ -30,6 +41,7 @@ jobs:
 
   types:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -54,6 +66,7 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -81,6 +94,7 @@ jobs:
     if: always()
     needs: [tests, types, coverage]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Fail unless every required job succeeded
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
