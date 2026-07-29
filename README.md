@@ -63,27 +63,39 @@ The result is a system that offers the user the freedom of conversation while gu
 
 ### Installation
 
-1. **Clone the repository:**
+```bash
+hermes plugins install sergiparpal/meal-manager --enable
+```
 
-   ```bash
-   git clone https://github.com/sergiparpal/meal-manager.git
-   cd meal-manager
-   ```
+That is the whole setup. Hermes fetches the plugin, reads `plugin.yaml`, registers the twenty-six tools, and injects `skill.md` into the agent context. There is no build step, no dependency installation, and no configuration — the plugin is standard library only, and no credentials or API keys are involved. Data files under `data/` are created lazily by the tools when first needed, so a fresh install starts with an empty fridge, an empty catalog, and the classic 60/40 suggestion blend.
 
-2. **Verify your Python version:**
+Then just talk to the agent: *"what should I cook tonight?"*
 
-   ```bash
-   python3 --version   # Should be 3.12+
-   ```
+### Working from a local checkout
 
-3. **Run the tests** to verify everything works:
+To hack on the plugin itself — or to try a change before it lands — clone the repository:
 
-   ```bash
-   python3 test_unit.py
-   python3 test_integration.py
-   ```
+```bash
+git clone https://github.com/sergiparpal/meal-manager.git
+```
 
-No build step, dependency installation, or configuration is needed. Data files under `data/` are created lazily by the tools when first needed.
+Verify your interpreter is in range (`python3 --version` should report 3.12+), then run both suites to confirm the checkout is healthy:
+
+```bash
+python3 test_unit.py
+```
+
+```bash
+python3 test_integration.py
+```
+
+Neither suite touches the real `data/` directory — see [Running the Integration Test](#running-the-integration-test).
+
+To install your working copy into Hermes, point the installer at the checkout with a `file://` URL. It is cloned like any other Git remote (after a local-scheme warning), so commit your changes first — the working tree itself is not copied:
+
+```bash
+hermes plugins install file:///absolute/path/to/meal-manager --enable
+```
 
 ---
 
