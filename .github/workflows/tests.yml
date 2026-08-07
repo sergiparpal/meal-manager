@@ -39,6 +39,30 @@ jobs:
       - name: Integration smoke test
         run: python3 test_integration.py
 
+      # AGENTS.md states that the live data/ under the repo root is never read
+      # or written: both suites redirect the repositories at a temp directory.
+      # Verified here rather than trusted, because the invariant is invisible
+      # right up until it breaks, and the thing absorbing the damage locally
+      # is a contributor's own data/.
+      #
+      # Two checks, because neither covers the other. data/ is gitignored, so
+      # `git status` stays silent when a suite creates it, and a fresh checkout
+      # has no data/ at all — its mere existence here is the failure. The
+      # porcelain check then catches a suite writing anywhere else in the tree.
+      - name: Suites left the checkout untouched
+        run: |
+          if [ -e data ]; then
+            echo "a suite created data/ under the repo root:"
+            ls -la data
+            exit 1
+          fi
+          dirty="$(git status --porcelain)"
+          if [ -n "$dirty" ]; then
+            echo "a suite modified the working tree:"
+            echo "$dirty"
+            exit 1
+          fi
+
   types:
     runs-on: ubuntu-latest
     timeout-minutes: 10

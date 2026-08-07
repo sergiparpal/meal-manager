@@ -1982,6 +1982,16 @@ def _run_all():
     run(test_tuning_deployed_weight_off_grid)
     run(test_tuning_reward_denominator_uses_ranking_size)
 
+    # Repository automation: the hook and the workflow still gate what they say.
+    run(test_pre_commit_hook_exists_and_is_executable)
+    run(test_pre_commit_hook_runs_both_suites)
+    run(test_pre_commit_hook_needs_nothing_installed)
+    run(test_ci_runs_both_suites)
+    run(test_ci_matrix_covers_the_declared_python_floor)
+    run(test_ci_actions_are_pinned_to_full_shas)
+    run(test_every_ci_job_feeds_the_gate)
+    run(test_ci_checks_the_suites_left_the_checkout_untouched)
+
 
 def test_fridge_unreadable_file_degrades_quietly():
     print("\n-- JsonFridgeRepository (unreadable file degrades) --")
@@ -2151,6 +2161,132 @@ def test_dii_finalizer_essential_wins():
     finally:
         import shutil as _shutil
         _shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Repository automation
+#
+# Not domain logic: these read files in the checkout. They live in this script
+# because the repo has two, and this is the one that runs without fixtures.
+#
+# They cover a class of failure that never announces itself. A hook that lost
+# its executable bit, a workflow renamed, a job added but left out of
+# `ci-complete`'s `needs:` — none of those produce an error. They stop gating,
+# quietly, and the first sign is a broken main.
+# ---------------------------------------------------------------------------
+
+_HOOK = _PLUGIN_DIR / ".githooks" / "pre-commit"
+_WORKFLOW = _PLUGIN_DIR / ".github" / "workflows" / "tests.yml"
+_SUITES = ("test_unit.py", "test_integration.py")
+
+
+def _workflow_text():
+    return _WORKFLOW.read_text(encoding="utf-8")
+
+
+def _workflow_jobs():
+    """Top-level job names: the two-space-indented bare keys under `jobs:`.
+
+    Split on `jobs:` first — `permissions:` and `concurrency:` also carry
+    two-space keys, and they sit above it.
+    """
+    import re
+
+    body = _workflow_text().split("\njobs:\n", 1)[1]
+    return [m.group(1) for m in re.finditer(r"^  ([A-Za-z0-9_-]+):$", body, re.M)]
+
+
+def test_pre_commit_hook_exists_and_is_executable():
+    print("\n-- .githooks/pre-commit (present, executable) --")
+    import os
+
+    check("the hook is committed", _HOOK.is_file(), f"missing {_HOOK}")
+    check("the hook is executable", os.access(_HOOK, os.X_OK),
+          "git skips a hook without the executable bit, and says nothing")
+
+
+def test_pre_commit_hook_runs_both_suites():
+    print("\n-- .githooks/pre-commit (runs both suites) --")
+    text = _HOOK.read_text(encoding="utf-8")
+    for suite in _SUITES:
+        check(f"the hook runs {suite}", suite in text, "not referenced")
+    check("the hook says how to install itself", "core.hooksPath" in text,
+          "it is versioned but does not activate on its own")
+
+
+def test_pre_commit_hook_needs_nothing_installed():
+    print("\n-- .githooks/pre-commit (no virtualenv) --")
+    # Naming mypy or coverage in a comment is fine; invoking them is not. A
+    # hook that fails on a clean clone is a hook people turn off.
+    commands = [ln for ln in _HOOK.read_text(encoding="utf-8").splitlines()
+                if not ln.lstrip().startswith("#")]
+    for tool in ("pip ", "mypy", "coverage", ".venv"):
+        check(f"the hook does not invoke {tool.strip()}",
+              not any(tool in ln for ln in commands),
+              "those live in CI, which is where the gate is")
+
+
+def test_ci_runs_both_suites():
+    print("\n-- tests.yml (runs both suites) --")
+    text = _workflow_text()
+    for suite in _SUITES:
+        check(f"CI runs {suite}", f"python3 {suite}" in text, "not invoked")
+
+
+def test_ci_matrix_covers_the_declared_python_floor():
+    print("\n-- tests.yml (matrix covers the declared floor) --")
+    import re
+
+    declared = re.search(r"Python (\d+\.\d+)\+",
+                         (_PLUGIN_DIR / "AGENTS.md").read_text(encoding="utf-8"))
+    check("AGENTS.md still declares a minimum", declared is not None,
+          "no 'Python X.Y+' found, so there is nothing to hold CI to")
+    if declared:
+        floor = declared.group(1)
+        # Scoped to the matrix list on purpose: the `types` and `coverage` jobs
+        # also name a python-version, so a substring search over the whole file
+        # passes even after the floor is dropped from the matrix.
+        listed = re.search(r"python-version: \[([^\]]*)\]", _workflow_text())
+        versions = {v.strip().strip("\"'") for v in listed.group(1).split(",")} \
+            if listed else set()
+        check(f"the matrix includes the floor {floor}", floor in versions,
+              f"the declared minimum is the one version that must be tested; "
+              f"matrix is {sorted(versions)}")
+
+
+def test_ci_actions_are_pinned_to_full_shas():
+    print("\n-- tests.yml (actions pinned to SHAs) --")
+    import re
+
+    refs = re.findall(r"^\s*- uses: \S+@(\S+)", _workflow_text(), re.M)
+    check("there are actions to check", bool(refs), "no `uses:` lines found")
+    for ref in refs:
+        check(f"{ref[:12]}... is a full commit SHA",
+              re.fullmatch(r"[0-9a-f]{40}", ref) is not None,
+              "a tag can be repointed by its owner; a commit SHA cannot")
+
+
+def test_every_ci_job_feeds_the_gate():
+    print("\n-- tests.yml (every job feeds ci-complete) --")
+    import re
+
+    jobs = _workflow_jobs()
+    check("the gate job exists", "ci-complete" in jobs, f"jobs found: {jobs}")
+    needs = re.search(r"needs: \[([^\]]*)\]", _workflow_text())
+    listed = {n.strip() for n in needs.group(1).split(",")} if needs else set()
+    missing = [j for j in jobs if j != "ci-complete" and j not in listed]
+    check("no job gates nothing", not missing,
+          f"{missing} missing from ci-complete's needs: main requires that one "
+          "check, so a job outside it cannot block a merge")
+
+
+def test_ci_checks_the_suites_left_the_checkout_untouched():
+    print("\n-- tests.yml (checkout untouched) --")
+    text = _workflow_text()
+    check("CI checks data/ was not created", "if [ -e data ]" in text,
+          "data/ is gitignored, so git status alone would not notice it")
+    check("CI checks the tree is clean", "git status --porcelain" in text,
+          "catches a suite writing anywhere else in the checkout")
 
 
 def main():
