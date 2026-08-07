@@ -1,0 +1,50 @@
+#!/bin/sh
+#
+# Both test suites before every commit. ~1 s, no virtualenv, no network.
+#
+# INSTALL, once per clone:
+#
+#     git config core.hooksPath .githooks
+#
+# The hook is versioned here and git is pointed at this directory rather than
+# copied into .git/hooks, because .git/ is not versioned: a copied hook is lost
+# on the next clone and nobody notices that it stopped running.
+#
+# WHAT IT DOES NOT RUN, AND WHY
+#
+# CI has four jobs; this runs the two that need nothing installed. `types`
+# (mypy==2.3.0) and `coverage` (coverage==7.15.0) are development-only tools
+# that a fresh checkout does not have, and a hook that fails on a clean clone
+# is a hook people turn off. They stay in CI, which is where the gate is.
+#
+# TO SKIP IT:  git commit --no-verify
+#
+# Reasonable for a docs-only commit. It is not a way past a red suite: main
+# requires the `ci-complete` status check, so a commit that skips the hook
+# still cannot merge.
+
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "pre-commit: python3 not found, which is all this needs." >&2
+    echo "            To commit anyway: git commit --no-verify" >&2
+    exit 1
+fi
+
+# Quiet on success: between them the two suites print about a thousand lines,
+# and burying the commit in them trains people to stop reading hook output.
+# On failure the whole thing is dumped, because that is when it is worth
+# reading.
+run_suite() {
+    if ! output=$(python3 "$1" 2>&1); then
+        echo "$output"
+        echo "pre-commit: $1 failed." >&2
+        return 1
+    fi
+    echo "pre-commit: $1 — $(echo "$output" | grep 'passed,' | tail -1 | tr -s ' ')"
+}
+
+run_suite test_unit.py
+run_suite test_integration.py

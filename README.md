@@ -232,6 +232,22 @@ Two further jobs run alongside it, both using development-only tools that the pl
 
 All three feed `ci-complete`, the single required status check — so any job added later must join its `needs:` list or it will not actually gate anything.
 
+The `tests` job ends by checking that the suites left the checkout exactly as they found it: no `data/` under the repo root, and a clean `git status`. Both are needed. `data/` is gitignored, so `git status` stays quiet if a suite creates it, and a fresh checkout has none — its mere existence is the failure. The porcelain check then catches a suite writing anywhere else. The invariant was already stated in `AGENTS.md`; this is what makes it fail loudly instead of quietly eating a contributor's own `data/`.
+
+### The pre-commit hook
+
+The same two scripts also run before every commit, in about a second. The hook is versioned, but git only picks it up once you point it there — once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+[`.githooks/pre-commit`](.githooks/pre-commit) runs `test_unit.py` and `test_integration.py`, stays quiet unless one fails, and needs no virtualenv. It deliberately does **not** run `mypy` or `coverage`: those are pinned development tools a fresh checkout does not have, and a hook that fails on a clean clone is a hook people turn off. They stay in CI, which is where the gate is.
+
+Skip it with `git commit --no-verify` — reasonable for a docs-only commit, and not a way past a red suite: `main` requires `ci-complete`, so the commit still cannot merge.
+
+A handful of checks in `test_unit.py` keep both nets honest: that the hook exists and is executable, that it runs both suites and needs nothing installed, that CI runs both suites and covers the declared Python floor, that every action is pinned to a full SHA, and that every job feeds `ci-complete`. None of those failures announce themselves — a hook without its executable bit is skipped in silence, and a job left outside the gate simply never blocks anything.
+
 ---
 
 ## Project Structure
@@ -411,8 +427,9 @@ Contributions are welcome. To get started:
 
 1. Fork the repository.
 2. Create a feature branch (`git checkout -b feature/my-feature`).
-3. Make your changes and verify them with `python3 test_unit.py` and `python3 test_integration.py`.
-4. Commit your changes and open a Pull Request. CI runs both scripts on the pull request automatically.
+3. Point git at the versioned hooks once, so both suites run before every commit: `git config core.hooksPath .githooks`.
+4. Make your changes and verify them with `python3 test_unit.py` and `python3 test_integration.py`.
+5. Commit your changes and open a Pull Request. CI runs both scripts on the pull request automatically.
 
 Please ensure all ingredient and dish names follow the lowercase/stripped normalization convention used throughout the codebase.
 

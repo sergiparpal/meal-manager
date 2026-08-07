@@ -42,6 +42,8 @@ coverage report --sort=cover --fail-under=91
 
 There is no build step, and lint is not a gate. `test_integration.py` and `test_unit.py` are plain Python scripts with assertions, not a pytest/unittest harness; every test function is registered in `main()` via `run(test_fn)`, which records a raised exception as a failure so one mistake cannot abort the rest of the suite. Both run in CI via `.github/workflows/tests.yml` (a Python 3.12/3.13/3.14 matrix on `ubuntu-latest`, `fail-fast: false`) for pushes to `main`, pull requests, and manual dispatch, alongside a `types` job (mypy) and a `coverage` job (`--fail-under=91`). All three feed the `ci-complete` gate.
 
+Both scripts also run before every commit through `.githooks/pre-commit`, activated once per clone with `git config core.hooksPath .githooks` — the hook is versioned, but git does not find it on its own. It is stdlib-only, quiet unless a suite fails, and skips `mypy` and `coverage` on purpose: a hook that fails on a clean clone is a hook people turn off. The `tests` job additionally verifies that the suites left the checkout untouched — no `data/` under the repo root, clean `git status` — and a group of checks at the end of `test_unit.py` holds both nets to what they claim, because a hook without its executable bit and a job outside `ci-complete`'s `needs:` both fail silently.
+
 ## Architecture
 
 ### Plugin wiring layer (top-level files)
