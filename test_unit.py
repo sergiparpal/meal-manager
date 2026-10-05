@@ -32,6 +32,7 @@ _handlers_common = importlib.import_module(".src.handlers._common", _PLUGIN_DIR.
 _repos_mod = importlib.import_module(".src.repositories", _PLUGIN_DIR.name)
 _history_event_mod = importlib.import_module(".src.history_event", _PLUGIN_DIR.name)
 _filelock_mod = importlib.import_module(".src.filelock", _PLUGIN_DIR.name)
+_dii_store_mod = importlib.import_module(".src.dii.store", _PLUGIN_DIR.name)
 _src_mod = importlib.import_module(".src", _PLUGIN_DIR.name)
 reject_unknown_args = _handlers_common.reject_unknown_args
 
@@ -1848,6 +1849,58 @@ def test_data_lock_excludes_another_process():
         _shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_data_lock_times_out_and_cleans_up():
+    print("\n-- DataDirLock (timeout) --")
+    if _filelock_mod.fcntl is None:
+        print("  SKIP  fcntl unavailable on this platform")
+        return
+    import fcntl
+    import os
+    import shutil as _shutil
+    import tempfile
+    import time
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_lock_"))
+    # flock is per open file description, so a second descriptor in this
+    # process contends exactly as another process would, without spawning one.
+    holder = os.open(str(tmp / ".lock"), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        lock = _filelock_mod.DataDirLock(tmp / ".lock", timeout_seconds=0.2)
+        fd_dir = _Path("/proc/self/fd")
+        open_before = len(list(fd_dir.iterdir())) if fd_dir.is_dir() else None
+        started = time.monotonic()
+        raised = None
+        try:
+            with lock:
+                pass
+        except _filelock_mod.DataLockTimeout as exc:
+            raised = exc
+        waited = time.monotonic() - started
+        check("a lock held elsewhere raises DataLockTimeout", raised is not None)
+        check("it gives up after timeout_seconds instead of hanging",
+              0.15 <= waited < 10, f"waited {waited:.2f}s")
+        check("a failed acquire leaves the lock unheld",
+              lock._fd is None and lock._depth == 0)
+        if open_before is not None:
+            check("a failed acquire closes its descriptor",
+                  len(list(fd_dir.iterdir())) == open_before)
+        # DataLockTimeout is an OSError, so the sanitizer only keeps its message
+        # because it is matched before the generic storage-error branch.
+        safe = _handlers_common._safe_error_message
+        check("the busy message reaches the user verbatim",
+              isinstance(raised, OSError) and safe(raised) == str(raised)
+              and "busy" in str(raised),
+              f"got {safe(raised) if raised else 'no exception'}")
+        fcntl.flock(holder, fcntl.LOCK_UN)
+        with lock:
+            reacquired = lock._fd is not None
+        check("the lock is usable again once the holder lets go", reacquired)
+    finally:
+        os.close(holder)
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_repositories_share_one_lock():
     print("\n-- DataDirLock (shared across repositories) --")
     import shutil as _shutil
@@ -1872,6 +1925,48 @@ def test_repositories_share_one_lock():
         _shutil.rmtree(tmp, ignore_errors=True)
     check("configure restores the previous lock path",
           shared.path == previous / ".lock", f"got {shared.path}")
+
+
+# ---------------------------------------------------------------------------
+# DII session store tests
+# ---------------------------------------------------------------------------
+
+
+def test_dii_orphan_sweep_takes_the_oldest_backups_first():
+    print("\n-- DII session store (orphan sweep order) --")
+    import os
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    limit = _dii_store_mod.ORPHAN_SCAN_LIMIT
+    total = limit + 5
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_dii_"))
+    try:
+        store = _dii_store_mod.IngredientSessionStore(
+            session_dir=tmp, cleanup_interval_seconds=0,
+        )
+        stale = json.dumps({"last_activity": "2000-01-01T00:00:00+00:00"})
+        stamps = {}
+        for index in range(total):
+            path = tmp / f"s{index:03d}.json"
+            path.write_text(stale, encoding="utf-8")
+            # A permutation, so modification order is unrelated to name order
+            # and to whatever order the directory listing comes back in.
+            stamp = 1_000_000_000 + ((index * 37) % total) * 60
+            os.utime(path, (stamp, stamp))
+            stamps[path.name] = stamp
+        newest = sorted(sorted(stamps, key=stamps.__getitem__)[limit:])
+
+        store.cleanup_expired()
+        remaining = sorted(path.name for path in tmp.glob("*.json"))
+        check("one sweep examines at most ORPHAN_SCAN_LIMIT backups",
+              len(remaining) == total - limit, f"{len(remaining)} left")
+        check("the oldest backups are swept first", remaining == newest,
+              f"left {remaining}, expected {newest}")
+        store.cleanup_expired()
+        check("the next sweep reaches the rest", not list(tmp.glob("*.json")))
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _run_all():
@@ -1936,7 +2031,9 @@ def _run_all():
     run(test_data_lock_configure_rejects_while_held)
     run(test_data_lock_releases_on_exception)
     run(test_data_lock_excludes_another_process)
+    run(test_data_lock_times_out_and_cleans_up)
     run(test_repositories_share_one_lock)
+    run(test_dii_orphan_sweep_takes_the_oldest_backups_first)
 
     run(test_cooking_event_from_dict_strict)
     run(test_history_projects_latest_per_dish)
