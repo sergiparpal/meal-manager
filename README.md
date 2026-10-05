@@ -228,7 +228,7 @@ Both scripts also run in GitHub Actions ([`.github/workflows/tests.yml`](.github
 Two further jobs run alongside it, both using development-only tools that the plugin itself never imports:
 
 - **`types`** — `mypy` over the whole package. The repository directory name contains a hyphen, which is not a valid Python package name, so the job symlinks the workspace under a valid one and points `MYPYPATH` at it.
-- **`coverage`** — both suites under `coverage`, gated at `--fail-under=91`. This is a ratchet against silent decay, not a target: raise it when coverage rises, never lower it to make a build pass.
+- **`coverage`** — both suites under `coverage`, gated at `--fail-under=92`. This is a ratchet against silent decay, not a target: raise it when coverage rises, never lower it to make a build pass.
 
 All three feed `ci-complete`, the single required status check — so any job added later must join its `needs:` list or it will not actually gate anything.
 

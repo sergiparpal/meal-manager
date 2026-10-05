@@ -452,6 +452,17 @@ def test_register_cooked_meal_bogus():
           and "catalog" in result.get("error", ""), f"got: {result}")
 
 
+def test_register_cooked_meal_validates_the_date_first():
+    print("\n-- register_cooked_meal (date checked before the dish) --")
+    # The date needs no stored data, so it is validated before the lock window
+    # and the catalog lookup: a bad date wins over an unknown dish.
+    for raw_date, expected in (("2024-13-45", "invalid date"), ("2999-01-01", "future")):
+        result = parse(register_cooked_meal({"dish_name": "Plato Inventado", "date": raw_date}))
+        error = result.get("error", "") if isinstance(result, dict) else ""
+        check(f"date {raw_date!r} is reported before the unknown dish",
+              expected in error and "catalog" not in error, f"got: {result}")
+
+
 def test_register_cooked_meal_rollback():
     print("\n-- register_cooked_meal (rollback) --")
     before = _repos_mod.history_repo.load()
@@ -770,6 +781,20 @@ def test_dii_finalize_options():
     }))
     check("committed to fridge", state["committed_to_fridge"] is True)
     check("did not commit to dish", state["committed_to_dish"] is False)
+
+
+def test_dii_rejects_a_malformed_session_id():
+    print("\n-- DII (malformed session_id) --")
+    # Session ids become filenames, so a path-shaped id must be refused at the
+    # boundary — before any lock is minted for it or any file is touched.
+    for name, handler in (("dii_get_state", dii_get_state), ("dii_clear_all", dii_clear_all)):
+        result = parse(handler({"session_id": "../dishes"}))
+        error = result.get("error", "") if isinstance(result, dict) else ""
+        check(f"{name} returns a clean ValueError envelope",
+              error.startswith("Invalid session_id"), f"got: {result}")
+    check("no session lock is left behind for the malformed id",
+          "../dishes" not in _dii_mod._store._locks)
+    check("the dish catalog is untouched", (_TMP_DATA_DIR / "dishes.json").exists())
 
 
 def test_dii_get_state():
@@ -1969,6 +1994,7 @@ def main():
         run(test_get_quick_shopping_list_max_missing)
         run(test_register_cooked_meal)
         run(test_register_cooked_meal_bogus)
+        run(test_register_cooked_meal_validates_the_date_first)
         run(test_register_cooked_meal_rollback)
         run(test_delete_history_entry)
         run(test_delete_history_entry_bogus)
@@ -1995,6 +2021,7 @@ def main():
         run(test_dii_full_lifecycle)
         run(test_dii_clear_all)
         run(test_dii_expired_session)
+        run(test_dii_rejects_a_malformed_session_id)
         run(test_dii_finalize_twice)
         run(test_dii_finalize_options)
         run(test_dii_finalize_rollback)

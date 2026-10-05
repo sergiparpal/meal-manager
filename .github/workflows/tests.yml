@@ -102,13 +102,13 @@ jobs:
         run: pip install coverage==7.15.0
 
       # A ratchet, not a goal: raise --fail-under when coverage rises, never
-      # lower it to make a build pass. Measured at 92%; one point of headroom
+      # lower it to make a build pass. Measured at 93%; one point of headroom
       # against rounding.
       - name: Measure coverage
         run: |
           coverage run --source=src,. --omit="test_*,*/__pycache__/*" test_unit.py
           coverage run --append --source=src,. --omit="test_*,*/__pycache__/*" test_integration.py
-          coverage report --sort=cover --fail-under=91
+          coverage report --sort=cover --fail-under=92
 
   ci-complete:
     # One stable check name for the branch ruleset to require. Matrix legs come and go, so
