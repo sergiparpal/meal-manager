@@ -2,7 +2,7 @@
 
 An intelligent meal planning and fridge inventory management system structured as an official Hermes plugin. It helps users decide what to cook for dinner and what to buy at the grocery store by analyzing their current fridge contents, recipe catalog, and cooking history.
 
-An AI assistant invokes the twenty-six tool handlers registered via `__init__.py:register(ctx)` to deliver personalized dinner suggestions, generate optimized shopping lists, manage fridge inventory, manage the recipe catalog, track cooked meals, and interactively build ingredient lists via the Dynamic Ingredient Interface (DII) — all with zero external dependencies.
+An AI assistant invokes the twenty-seven tool handlers registered via `__init__.py:register(ctx)` to deliver personalized dinner suggestions, generate optimized shopping lists, manage fridge inventory, manage the recipe catalog, track cooked meals, and interactively build ingredient lists via the Dynamic Ingredient Interface (DII) — all with zero external dependencies.
 
 ---
 
@@ -67,7 +67,7 @@ The result is a system that offers the user the freedom of conversation while gu
 hermes plugins install sergiparpal/meal-manager --enable
 ```
 
-That is the whole setup. Hermes fetches the plugin, reads `plugin.yaml`, registers the twenty-six tools, and injects `skill.md` into the agent context. There is no build step, no dependency installation, and no configuration — the plugin is standard library only, and no credentials or API keys are involved. Data files under `data/` are created lazily by the tools when first needed, so a fresh install starts with an empty fridge, an empty catalog, and the classic 60/40 suggestion blend.
+That is the whole setup. Hermes fetches the plugin, reads `plugin.yaml`, registers the twenty-seven tools, and injects `skill.md` into the agent context. There is no build step, no dependency installation, and no configuration — the plugin is standard library only, and no credentials or API keys are involved. Data files under `data/` are created lazily by the tools when first needed, so a fresh install starts with an empty fridge, an empty catalog, and the classic 60/40 suggestion blend.
 
 Then just talk to the agent: *"what should I cook tonight?"*
 
@@ -77,7 +77,7 @@ Here is a first evening, from a fresh install to dinner. You only type the lines
 
 > **You:** What should I cook tonight?
 >
-> **Agent:** Nothing to suggest yet. Tell me a few dishes you usually make and I'll set them up.
+> **Agent:** You don't have any recipes yet, so there's nothing to suggest. Tell me a few dishes you usually make and I'll set them up.
 >
 > **You:** Carbonara, potato omelette and chicken with rice.
 >
@@ -173,6 +173,7 @@ Example phrases and what the agent will do behind the scenes:
 - *"Add lasagna, cannelloni, and paella to my recipes."* — adds several dishes in a single pass.
 - *"Carbonara doesn't carry cream, fix the recipe."* — replaces the ingredient list of an existing dish.
 - *"Delete the chicken curry recipe."* — removes it from the catalog.
+- *"What recipes do I have saved?"* — lists every dish in your catalog and what goes into it.
 
 **Correcting mistakes**
 
@@ -194,7 +195,7 @@ Reply naturally — *"yes"*, *"skip"*, *"remove X"*, *"also add Y"*, or *"done"*
 
 ### As a Hermes Plugin
 
-The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `__init__.py`. It registers twenty-six tools:
+The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `__init__.py`. It registers twenty-seven tools:
 
 | Tool | Purpose |
 |---|---|
@@ -207,6 +208,7 @@ The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `_
 | `delete_history_entry` | Undo for `register_cooked_meal` — retracts the most recent cook of a dish |
 | `list_cooking_history` | Lists recorded cook events, newest first — "when did I last cook X?" |
 | `list_fridge` | Returns the current fridge contents with portion counts, expiry dates, and what needs using up |
+| `list_dishes` | Lists every recipe in the catalog with its essential and optional ingredients |
 | `add_dish` | Adds a new recipe to the catalog |
 | `add_dishes_batch` | Adds multiple recipes in a single call |
 | `delete_dish` | Removes a recipe from the catalog |
@@ -260,7 +262,7 @@ Swap `get_meal_suggestions` for any other module under `src/handlers/`, for exam
 python3 test_integration.py
 ```
 
-This script creates a throw-away temp directory, points the repositories and DII session store at it via `configure()`, seeds its own fixtures, and exercises all twenty-six tools end-to-end. The real `data/` files are never touched — the temp directory is deleted on teardown.
+This script creates a throw-away temp directory, points the repositories and DII session store at it via `configure()`, seeds its own fixtures, and exercises all twenty-seven tools end-to-end. The real `data/` files are never touched — the temp directory is deleted on teardown.
 
 For the fastest feedback on pure domain logic, run `python3 test_unit.py`. It covers the dataclass, scoring, shopping, weight-tuning, cooking-event, alias, expiry, and ingredient-normalization helpers without touching `data/`.
 

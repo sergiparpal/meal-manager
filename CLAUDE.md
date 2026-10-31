@@ -6,7 +6,7 @@ Read `AGENTS.md` before starting — it contains additional repository-specific 
 
 ## Project Overview
 
-A meal planning and fridge inventory manager structured as a Hermes plugin. The entry point is `__init__.py:register(ctx)`, which auto-discovers the twenty-six tool handlers under `src/handlers/` and installs the skill. All state is persisted in JSON files under `data/`.
+A meal planning and fridge inventory manager structured as a Hermes plugin. The entry point is `__init__.py:register(ctx)`, which auto-discovers the twenty-seven tool handlers under `src/handlers/` and installs the skill. All state is persisted in JSON files under `data/`.
 
 Python 3.12+, no external **runtime** dependencies (stdlib only). `mypy`, `ruff` and `coverage` are development/CI-only tools, pinned in CI and configured in `pyproject.toml` — nothing under `src/` or `__init__.py` imports them, and no runtime code depends on them.
 

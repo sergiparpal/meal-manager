@@ -1,4 +1,4 @@
-"""Integration smoke test for all 26 meal_manager tools.
+"""Integration smoke test for all 27 meal_manager tools.
 
 The test creates a throw-away data directory under ``tempfile.gettempdir()``
 and points the repositories + DII session store at it via the package-level
@@ -168,6 +168,7 @@ update_fridge_inventory = _load_handler("update_fridge_inventory")
 register_cooked_meal = _load_handler("register_cooked_meal")
 delete_history_entry = _load_handler("delete_history_entry")
 list_fridge = _load_handler("list_fridge")
+list_dishes = _load_handler("list_dishes")
 add_dish = _load_handler("add_dish")
 add_dishes_batch = _load_handler("add_dishes_batch")
 delete_dish = _load_handler("delete_dish")
@@ -208,6 +209,51 @@ def test_list_fridge():
     check("legacy list seeded one portion each",
           in_stock == {"arroz": 1, "patatas": 1}, f"got {in_stock}")
     check("nothing out of stock yet", result["out_of_stock"] == [], f"got {result}")
+
+
+def test_list_dishes():
+    print("\n-- list_dishes --")
+    result = parse(list_dishes({}))
+    check("returns the dishes/count shape",
+          set(result) == {"dishes", "count"}, f"got {result}")
+    check("counts the seeded catalog", result["count"] == 2, f"got {result}")
+    check("sorted by normalized name",
+          [d["name"] for d in result["dishes"]] == ["arroz con pollo", "tortilla de patatas"],
+          f"got {result['dishes']}")
+    check("splits essentials from optionals and leaves the steps out",
+          result["dishes"][0] == {
+              "name": "arroz con pollo",
+              "essential": ["arroz", "pollo"],
+              "optional": ["pimientos"],
+              "has_instructions": False,
+          }, f"got {result['dishes'][0]}")
+
+
+def test_list_dishes_empty_catalog():
+    print("\n-- list_dishes (fresh install) --")
+    # A fresh install has no dishes.json at all, which the seeded fixtures
+    # cannot show. configure() repoints the repositories globally, so restore
+    # them in finally:, as test_register_wires_every_tool does.
+    assert _TMP_DATA_DIR is not None
+    other = Path(tempfile.mkdtemp(prefix="meal_manager_empty_"))
+    try:
+        _repos_mod.configure(other)
+        empty = parse(list_dishes({}))
+        check("an empty catalog lists nothing",
+              empty == {"dishes": [], "count": 0}, f"got {empty}")
+
+        add_dish({"name": "Toast", "ingredients": ["bread"], "instructions": "Toast it."})
+        listed = parse(list_dishes({}))["dishes"]
+        check("flags a dish that has cooking steps",
+              listed == [{"name": "toast", "essential": ["bread"], "optional": [],
+                          "has_instructions": True}], f"got {listed}")
+    finally:
+        _repos_mod.configure(_TMP_DATA_DIR)
+        shutil.rmtree(other, ignore_errors=True)
+
+    check("configuration restored for the tests that follow",
+          _repos_mod.dish_repo.path == _TMP_DATA_DIR / "dishes.json",
+          f"got {_repos_mod.dish_repo.path}")
 
 
 def test_update_fridge_add():
@@ -1832,6 +1878,10 @@ def test_dish_load_preserves_malformed():
     check("valid untargeted dish preserved", "keeper" in names, f"got: {names}")
     check("targeted dish removed", "victim" not in names, f"got: {names}")
 
+    listed = [d["name"] for d in parse(list_dishes({}))["dishes"]]
+    check("list_dishes shows only the dishes that parse",
+          listed == ["keeper"], f"got: {listed}")
+
     # Adding a valid dish whose name collides with the preserved malformed row
     # must NOT create a permanent duplicate-named ghost: the malformed twin is
     # dropped in favour of the live dish.
@@ -1980,6 +2030,7 @@ def main():
     _setup_tmp_data()
     try:
         run(test_list_fridge)
+        run(test_list_dishes)
         # These two run against the untouched seed fridge: the fridge tests
         # below add 'pollo', which would make Arroz con Pollo cookable, and
         # would also overwrite the legacy list-shaped fixture file.
@@ -2080,6 +2131,11 @@ def main():
         run(test_merge_alias_clamps_out_of_band_count)
         run(test_init_session_rejects_bad_pre_select)
         run(test_history_unreadable_degrades_and_reports)
+
+        # list_dishes on a fresh install. It repoints the repositories at an
+        # empty directory and restores them in its own finally:, so it runs
+        # late for the same reason as test_register_wires_every_tool below.
+        run(test_list_dishes_empty_catalog)
 
         # Tool discovery and plugin wiring. Read-only against the catalog, but
         # test_register_wires_every_tool reconfigures the repository and DII

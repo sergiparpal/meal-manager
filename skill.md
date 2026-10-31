@@ -108,7 +108,7 @@ Where a recipe listed both, essential wins over optional. Where the fridge held 
 
 - **When to use:**
   - The user says two entries are the same thing ("tomate and tomates are the same", "that's just what I call olive oil").
-  - You notice near-duplicate spellings in `list_fridge` or the catalog — surface it and *ask* before merging. This rewrites stored data, so it is not a call to make silently.
+  - You notice near-duplicate spellings in `list_fridge` or `list_dishes` — surface it and *ask* before merging. This rewrites stored data, so it is not a call to make silently.
   - A dish is not being suggested and the reason turns out to be a spelling split between the recipe and the fridge.
 
 ### `list_ingredient_aliases`
@@ -133,6 +133,15 @@ Expired items are **still listed as in stock** and are still usable. The date is
 - **When to use:**
   - The user asks "what do I have in the fridge?" or "what ingredients do I have?".
   - You need to check the inventory before performing another operation.
+
+### `list_dishes`
+
+Returns every dish in the catalog, sorted by name: `dishes` (each with `name`, `essential`, `optional` and `has_instructions`) and `count`. Cooking steps are left out to keep the listing short; read them for one dish with `get_dish_recipe`.
+
+- **When to use:**
+  - The user asks which recipes they have saved, or which of them use a given ingredient.
+  - Before offering to help populate the catalog (see the onboarding directive below). `get_meal_suggestions` returns an empty list both when there are no recipes and when nothing is cookable, so on its own it cannot tell you which case you are in.
+  - You want to spot near-duplicate ingredient spellings across recipes.
 
 ### `add_dish`
 
@@ -201,7 +210,7 @@ Empties the fridge completely (every ingredient and its portion count is dropped
 
 ### Recipe onboarding
 
-When the catalog is empty or has fewer than 5 dishes:
+Check the catalog size with `list_dishes`, in particular whenever `get_meal_suggestions` comes back empty: an empty list alone does not say whether there are no recipes or just nothing cookable. When the catalog is empty or has fewer than 5 dishes:
 
 1. Proactively offer to help populate it: *"I see you have few recipes. Would you like me to help you add dishes? Tell me some you usually cook."*
 2. When the user mentions dishes (e.g., "I usually make pasta carbonara, omelette and salad"), use your culinary knowledge to infer the ingredients for each dish and whether they are essential or optional.
