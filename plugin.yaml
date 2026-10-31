@@ -12,6 +12,7 @@ provides_tools:
   - delete_history_entry
   - list_cooking_history
   - list_fridge
+  - list_dishes
   - add_dish
   - add_dishes_batch
   - delete_dish
