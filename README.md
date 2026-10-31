@@ -4,6 +4,8 @@ An intelligent meal planning and fridge inventory management system structured a
 
 An AI assistant invokes the twenty-seven tool handlers registered via `__init__.py:register(ctx)` to deliver personalized dinner suggestions, generate optimized shopping lists, manage fridge inventory, manage the recipe catalog, track cooked meals, and interactively build ingredient lists via the Dynamic Ingredient Interface (DII) — all with zero external dependencies.
 
+**New here?** [Install it](#installation) with one command, then follow [Your first dinner](#your-first-dinner): a first evening, from a fresh install to dinner, as a plain conversation with the agent — no JSON and no tool names.
+
 ---
 
 ## Design Philosophy: A Deterministic Core with a Conversational Shell
