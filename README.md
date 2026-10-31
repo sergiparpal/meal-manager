@@ -71,6 +71,49 @@ That is the whole setup. Hermes fetches the plugin, reads `plugin.yaml`, registe
 
 Then just talk to the agent: *"what should I cook tonight?"*
 
+### Your first dinner
+
+Here is a first evening, from a fresh install to dinner. You only type the lines marked **You**; the agent picks the tools and does the bookkeeping. Its wording will differ from this, but the facts it gives you come from the tools: every reply below matches what the plugin actually returns for this conversation.
+
+> **You:** What should I cook tonight?
+>
+> **Agent:** Nothing to suggest yet. Tell me a few dishes you usually make and I'll set them up.
+>
+> **You:** Carbonara, potato omelette and chicken with rice.
+>
+> **Agent:** Here's what I'd save. Does it look right?
+>
+> - **Spaghetti carbonara:** spaghetti, eggs, bacon; parmesan and black pepper optional
+> - **Potato omelette:** eggs, potatoes, olive oil; onion optional
+> - **Chicken with rice:** chicken, rice; garlic and peppers optional
+>
+> **You:** Yes, but no onion in my omelette.
+>
+> **Agent:** Saved all three, without the onion. What's in your fridge right now?
+>
+> **You:** A dozen eggs, spaghetti, bacon, potatoes, some parmesan and rice. Olive oil and salt I always have.
+>
+> **Agent:** Got it. I've counted the eggs as about three meals' worth and the rest as one each. Olive oil and salt are staples, so they never run out. Tonight you can make:
+>
+> 1. **Spaghetti carbonara** — the top pick, since you even have the parmesan
+> 2. **Potato omelette**
+>
+> **You:** Carbonara it is.
+>
+> **Agent:** Enjoy! I've logged it, so carbonara won't come up again until the day after tomorrow. It used up the spaghetti and the bacon, and there are eggs left for about two more meals.
+
+*The next day, on the way home:*
+
+> **You:** I'm stopping at the store. What should I buy?
+>
+> **Agent:** **Chicken.** With the rice you already have, that's chicken with rice tonight. You're also out of spaghetti and bacon, if you want carbonara again later this week.
+>
+> **You:** Got chicken, and some garlic.
+>
+> **Agent:** Added. Tonight: **chicken with rice**, and the garlic puts it ahead of the potato omelette.
+
+That is the whole loop: describe your recipes once, then just mention what you buy and what you cook. The plugin keeps track of the fridge, the portions and what you ate recently, and the agent answers from that. Ask *"how do I make it?"* and it reads the recipe back, cooking steps included once you've dictated them. More phrases are in [As a Hermes Agent User](#as-a-hermes-agent-user).
+
 ### Working from a local checkout
 
 To hack on the plugin itself — or to try a change before it lands — clone the repository:
