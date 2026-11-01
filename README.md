@@ -71,6 +71,14 @@ hermes plugins install sergiparpal/meal-manager --enable
 
 That is the whole setup. Hermes fetches the plugin, reads `plugin.yaml`, and registers the twenty-seven tools along with `skill.md` as the skill `meal_manager:assistant`. Hermes v0.21.6 and later list that skill in the agent's skill index, so the agent knows to load it when the conversation turns to food. It does not appear under **Capabilities → Skills** in Hermes Desktop or in `hermes skills list`, because both list only the skills in Hermes's own skills folders; to check that the agent has it, ask the agent which skills it can load. There is no build step, no dependency installation, and no configuration — the plugin is standard library only, and no credentials or API keys are involved. Data files under `data/` are created lazily by the tools when first needed, so a fresh install starts with an empty fridge, an empty catalog, and the classic 60/40 suggestion blend.
 
+Hermes keeps plugins per profile, so that command installs into the active profile only. To use the plugin in another profile, install it there as well:
+
+```bash
+hermes -p <profile> plugins install sergiparpal/meal-manager --enable
+```
+
+Each profile's copy keeps its own `data/`, so recipes, fridge and cooking history are separate per profile.
+
 Then just talk to the agent: *"what should I cook tonight?"*
 
 ### Your first dinner
