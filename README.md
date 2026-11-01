@@ -124,6 +124,57 @@ Here is a first evening, from a fresh install to dinner. You only type the lines
 
 That is the whole loop: describe your recipes once, then just mention what you buy and what you cook. The plugin keeps track of the fridge, the portions and what you ate recently, and the agent answers from that. Ask *"how do I make it?"* and it reads the recipe back, cooking steps included once you've dictated them. More phrases are in [As a Hermes Agent User](#as-a-hermes-agent-user).
 
+#### In Hermes Desktop
+
+The same evening, in a real Hermes Desktop session. The replies come straight from the agent, so the wording differs from the walkthrough above, but the steps match: it offers to set up recipes, asks before saving them, turns the fridge into suggestions, logs the meal, and a new session picks up where the last one left off.
+
+![Hermes Desktop with Meal Manager: the first question, "What should I cook tonight?", and the start of the second exchange](docs/images/first-dinner/app-overview.png)
+
+<details>
+<summary>Every exchange, screenshot by screenshot</summary>
+
+**1. An empty catalog.** It offers to add your dishes instead of inventing one.
+
+![You: "What should I cook tonight?" Agent: the recipe catalog and fridge are empty, so it asks which dishes you usually cook](docs/images/first-dinner/01-what-to-cook.png)
+
+**2. It proposes the recipes** and asks before saving them.
+
+![You: "Carbonara, potato omelette and chicken with rice." Agent: proposes ingredients for each and asks whether they match before saving](docs/images/first-dinner/02-propose-recipes.png)
+
+**3. Your corrections go in,** then the recipes are saved.
+
+![You: "Yes, but I use spaghetti and bacon, not guanciale, pecorino is optional, and no onion in my omelette. The oil is olive oil." Agent: saved all three recipes and asks what is in the fridge](docs/images/first-dinner/03-confirm-recipes.png)
+
+**4. From the fridge to tonight's options.** The dozen eggs become six portions; olive oil and salt become staples.
+
+![You list the fridge. Agent: suggests carbonara, mentions the potato omelette, and reports how it saved the inventory](docs/images/first-dinner/04-fridge.png)
+
+**5. Cooking logs the meal** and takes one portion of each essential out of the fridge.
+
+![You: "Carbonara it is." Agent: logged it and deducted one portion each of bacon, eggs and spaghetti](docs/images/first-dinner/05-cook.png)
+
+*Later, in a new session:*
+
+**6. Shopping.** One purchase unlocks chicken with rice.
+
+![You: "I'm stopping at the store. What should I buy?" Agent: chicken, for chicken with rice; also out of bacon and spaghetti for carbonara](docs/images/first-dinner/06-shopping.png)
+
+**7. Restocking** makes chicken with rice cookable.
+
+![You: "Got chicken, and some garlic." Agent: added both; chicken with rice or a potato omelette are now possible](docs/images/first-dinner/07-restock.png)
+
+**8. The saved recipe has no steps yet,** so it says so and offers to add yours.
+
+![You: "How do I make it?" Agent: lists the saved ingredients, notes there are no cooking instructions yet, and offers to add your method](docs/images/first-dinner/08-how-to-cook.png)
+
+**9. A suggested method,** marked as not saved to the recipe.
+
+![You: "No, could you suggest a simple way to make it?" Agent: a four-step method, explicitly not saved](docs/images/first-dinner/09-simple-method.png)
+
+</details>
+
+Recorded on Hermes v0.22.5 with GPT-6.1 Terra at medium reasoning through OpenRouter, in a fresh profile with Hermes's background skill and memory review turned off, so nothing from earlier runs could leak in. The app's UI scale and chat text size were set to 150% so the text stays readable at README width. The images are real screenshots, untouched except that each exchange is cropped from the window; the capture tool saved them at about 86% of the window's size. Both sessions ran the same afternoon. The first reply of each session shows a failed lookup of `plugin:meal_manager:assistant` before the skill loads: that is a Hermes v0.22.5 bug, fixed upstream after that release in [NousResearch/hermes-agent#143784](https://github.com/NousResearch/hermes-agent/pull/143784).
+
 ### Working from a local checkout
 
 To hack on the plugin itself — or to try a change before it lands — clone the repository:
