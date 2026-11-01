@@ -10,7 +10,14 @@ from .src.repositories import configure as _configure_repos
 # Library convention: install a NullHandler on the package root so callers
 # without logging configured don't see "No handlers could be found" warnings.
 # Submodules just call ``logging.getLogger(__name__)`` and inherit this.
-logging.getLogger(__name__).addHandler(logging.NullHandler())
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
+# Hermes namespaces plugin skills, so the agent sees ``meal_manager:assistant``.
+# The description is all the system prompt's skill index shows for it, and
+# recent Hermes releases clip it to 60 characters.
+SKILL_NAME = "assistant"
+SKILL_DESCRIPTION = "What to cook, recipes, fridge and grocery shopping"
 
 
 def register(ctx, *, data_dir: Path | str | None = None):
@@ -35,5 +42,18 @@ def register(ctx, *, data_dir: Path | str | None = None):
     for name, schema, handler in iter_tools():
         ctx.register_tool(name, "meal_manager", schema, handler)
 
-    skill_path = Path(__file__).parent / "skill.md"
-    ctx.inject_message(skill_path.read_text(encoding="utf-8"))
+    # Not ``ctx.inject_message``: it queues a message into a live session, and
+    # during plugin discovery there is none, so it returned False and the
+    # skill never reached the model.
+    register_skill = getattr(ctx, "register_skill", None)
+    if register_skill is None:
+        logger.warning(
+            "This Hermes version has no ctx.register_skill; "
+            "skill.md was not registered"
+        )
+        return
+    register_skill(
+        SKILL_NAME,
+        Path(__file__).parent / "skill.md",
+        description=SKILL_DESCRIPTION,
+    )

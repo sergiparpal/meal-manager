@@ -171,7 +171,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 - Make the smallest correct change.
 - Avoid broad refactors unrelated to the task.
 - Do not rename persisted keys or tool `NAME` constants without updating every consumer (handler module name, `plugin.yaml`, `skill.md`, tests).
-- Keep top-level `__init__.py` minimal — it should only walk `src/handlers/` and inject the skill. Tool definitions belong in their own modules under `src/handlers/`.
+- Keep top-level `__init__.py` minimal — it should only walk `src/handlers/` and register the skill. Tool definitions belong in their own modules under `src/handlers/`.
 - Do not edit live `data/` files unless the task explicitly requires it.
 - If you touch persistence or DII, run both test scripts before finishing.
 - If you touch a single pure function, the targeted unit test is usually enough.
