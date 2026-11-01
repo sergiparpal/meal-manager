@@ -69,7 +69,7 @@ The result is a system that offers the user the freedom of conversation while gu
 hermes plugins install sergiparpal/meal-manager --enable
 ```
 
-That is the whole setup. Hermes fetches the plugin, reads `plugin.yaml`, registers the twenty-seven tools, and injects `skill.md` into the agent context. There is no build step, no dependency installation, and no configuration — the plugin is standard library only, and no credentials or API keys are involved. Data files under `data/` are created lazily by the tools when first needed, so a fresh install starts with an empty fridge, an empty catalog, and the classic 60/40 suggestion blend.
+That is the whole setup. Hermes fetches the plugin, reads `plugin.yaml`, and registers the twenty-seven tools along with `skill.md` as the skill `meal_manager:assistant`. Hermes v0.21.6 and later list that skill in the agent's skill index, so the agent knows to load it when the conversation turns to food. There is no build step, no dependency installation, and no configuration — the plugin is standard library only, and no credentials or API keys are involved. Data files under `data/` are created lazily by the tools when first needed, so a fresh install starts with an empty fridge, an empty catalog, and the classic 60/40 suggestion blend.
 
 Then just talk to the agent: *"what should I cook tonight?"*
 

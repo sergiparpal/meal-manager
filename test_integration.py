@@ -11,6 +11,8 @@ Usage:
 
 import importlib
 import json
+import logging
+import re
 import shutil
 import sys
 import tempfile
@@ -1965,8 +1967,8 @@ def test_plugin_yaml_matches_registered_tools():
           len(declared) == len(set(declared)), f"got {declared}")
 
 
-class _FakeCtx:
-    """Minimal stand-in for the Hermes plugin context."""
+class _PreSkillCtx:
+    """A Hermes plugin context from before ``register_skill`` (v2026.4.13)."""
 
     def __init__(self):
         self.registered: list[tuple] = []
@@ -1975,8 +1977,19 @@ class _FakeCtx:
     def register_tool(self, name, plugin, schema, handler):
         self.registered.append((name, plugin, schema, handler))
 
-    def inject_message(self, text):
-        self.injected.append(text)
+    def inject_message(self, content, role="user"):
+        self.injected.append(content)
+
+
+class _FakeCtx(_PreSkillCtx):
+    """Minimal stand-in for the Hermes plugin context."""
+
+    def __init__(self):
+        super().__init__()
+        self.skills: list[tuple] = []
+
+    def register_skill(self, name, path, description="", frontmatter=None):
+        self.skills.append((name, Path(path), description))
 
 
 def test_register_wires_every_tool():
@@ -2001,10 +2014,25 @@ def test_register_wires_every_tool():
               all(isinstance(s, dict) and callable(h)
                   for _, _, s, h in ctx.registered))
 
-        skill_text = (_PLUGIN_DIR / "skill.md").read_text(encoding="utf-8")
-        check("skill.md was injected exactly once", len(ctx.injected) == 1)
-        check("the injected text is skill.md",
-              ctx.injected == [skill_text] if ctx.injected else False)
+        check("exactly one skill is registered",
+              len(ctx.skills) == 1, f"got {ctx.skills}")
+        skill_name, skill_path, skill_description = (
+            ctx.skills[0] if ctx.skills else ("", Path(), ""))
+        check("the registered skill is skill.md",
+              skill_path.resolve() == _PLUGIN_DIR / "skill.md",
+              f"got {skill_path}")
+        # Hermes rejects any other skill name, and derives the ':' namespace
+        # from plugin.yaml itself.
+        check("the skill name is one Hermes accepts",
+              re.fullmatch(r"[A-Za-z0-9_-]+", skill_name) is not None,
+              f"got {skill_name!r}")
+        # The description is the skill's whole row in the system prompt's
+        # skill index; Hermes clips it at SKILL_PROMPT_DESC_LIMIT (60).
+        check("the skill description fits the skill index",
+              0 < len(skill_description) <= 60,
+              f"{len(skill_description)} chars: {skill_description!r}")
+        check("skill.md is not sent as a chat message", ctx.injected == [],
+              f"got {len(ctx.injected)} message(s)")
 
         check("data_dir redirected the dish repository",
               _repos_mod.dish_repo.path == other / "dishes.json",
@@ -2020,6 +2048,33 @@ def test_register_wires_every_tool():
     check("configuration restored for the tests that follow",
           _repos_mod.dish_repo.path == _TMP_DATA_DIR / "dishes.json",
           f"got {_repos_mod.dish_repo.path}")
+
+
+def test_register_without_register_skill():
+    print("\n-- register() on a host without register_skill --")
+    records: list[logging.LogRecord] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    collector = _Collect(level=logging.WARNING)
+    package_logger = logging.getLogger(_pkg.__name__)
+    package_logger.addHandler(collector)
+    try:
+        ctx = _PreSkillCtx()
+        _pkg.register(ctx)
+    finally:
+        package_logger.removeHandler(collector)
+
+    expected = [name for name, _, _ in _handlers_pkg.iter_tools()]
+    check("every tool still registers",
+          [name for name, _, _, _ in ctx.registered] == expected)
+    check("skill.md is not sent as a chat message", ctx.injected == [],
+          f"got {len(ctx.injected)} message(s)")
+    check("the missing skill is logged as a warning",
+          any("register_skill" in r.getMessage() for r in records),
+          f"got {[r.getMessage() for r in records]}")
 
 
 # ---------------------------------------------------------------------------
@@ -2144,6 +2199,7 @@ def main():
         run(test_iter_tools_discovers_every_handler)
         run(test_plugin_yaml_matches_registered_tools)
         run(test_register_wires_every_tool)
+        run(test_register_without_register_skill)
 
         # These overwrite dishes.json wholesale — keep them last.
         run(test_dii_session_id_traversal_rejected)
