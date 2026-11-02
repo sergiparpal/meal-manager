@@ -9,10 +9,14 @@ NAME = "get_meal_suggestions"
 
 SCHEMA = {
     "description": (
-        "Get ranked meal suggestions based on the current fridge contents "
-        "and cooking history. Dishes cooked fewer than 2 days ago are "
-        "excluded. Returns a list of {dish, score} objects sorted by "
-        "descending score. An empty list means no dishes can be suggested."
+        "Get ranked meal suggestions from the saved recipes, based on the "
+        "current fridge contents and cooking history. Dishes cooked fewer "
+        "than 2 days ago are excluded. Returns a list of {dish, score} "
+        "objects sorted by descending score. An empty list means no saved "
+        "recipe can be suggested right now; it is not a cue to propose a "
+        "dish of your own. Call list_dishes to tell an empty catalog (offer "
+        "to set up the user's usual dishes) from one where nothing is "
+        "cookable."
     ),
     "type": "object",
     "properties": {},

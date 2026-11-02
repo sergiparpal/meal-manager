@@ -19,6 +19,16 @@ logger.addHandler(logging.NullHandler())
 SKILL_NAME = "assistant"
 SKILL_DESCRIPTION = "What to cook, recipes, fridge and grocery shopping"
 
+# Hermes v0.22.5 files plugin skills under a "plugin" category, so some models
+# ask for ``plugin:meal_manager:assistant``, get "not found" and answer without
+# the skill. The agent reads a tool's description before calling it, so every
+# description ends by naming the skill exactly.
+SKILL_POINTER = (
+    " Usage guidance for all meal_manager tools is in the skill "
+    f"meal_manager:{SKILL_NAME}: if it isn't loaded yet in this conversation, "
+    "load it first, by exactly that name (no plugin: prefix)."
+)
+
 
 def register(ctx, *, data_dir: Path | str | None = None):
     """Register all meal_manager tools and the skill with the Hermes context.
@@ -39,13 +49,18 @@ def register(ctx, *, data_dir: Path | str | None = None):
         _configure_repos(data_dir)
         _configure_dii(data_dir / "sessions")
 
-    for name, schema, handler in iter_tools():
-        ctx.register_tool(name, "meal_manager", schema, handler)
-
     # Not ``ctx.inject_message``: it queues a message into a live session, and
     # during plugin discovery there is none, so it returned False and the
     # skill never reached the model.
     register_skill = getattr(ctx, "register_skill", None)
+
+    for name, schema, handler in iter_tools():
+        # Point at the skill only where the host can register it, and on a
+        # copy, so the handler module's SCHEMA keeps its own description.
+        if register_skill is not None:
+            schema = {**schema, "description": schema["description"] + SKILL_POINTER}
+        ctx.register_tool(name, "meal_manager", schema, handler)
+
     if register_skill is None:
         logger.warning(
             "This Hermes version has no ctx.register_skill; "

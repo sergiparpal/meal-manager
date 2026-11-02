@@ -2013,6 +2013,16 @@ def test_register_wires_every_tool():
         check("schemas and handlers are passed through",
               all(isinstance(s, dict) and callable(h)
                   for _, _, s, h in ctx.registered))
+        # Hermes v0.22.5 sends some models looking for the skill under a
+        # ``plugin:`` prefix that does not resolve; the exact name has to
+        # reach them in the descriptions they read before calling a tool.
+        originals = {n: s["description"] for n, s, _ in _handlers_pkg.iter_tools()}
+        unpointed = [n for n, _, s, _ in ctx.registered
+                     if s["description"] != originals[n] + _pkg.SKILL_POINTER]
+        check("every tool description ends by naming the skill",
+              unpointed == [], f"got {unpointed}")
+        check("the handler modules' own SCHEMAs are left untouched",
+              not any(d.endswith(_pkg.SKILL_POINTER) for d in originals.values()))
 
         check("exactly one skill is registered",
               len(ctx.skills) == 1, f"got {ctx.skills}")
@@ -2026,6 +2036,10 @@ def test_register_wires_every_tool():
         check("the skill name is one Hermes accepts",
               re.fullmatch(r"[A-Za-z0-9_-]+", skill_name) is not None,
               f"got {skill_name!r}")
+        check("the tool descriptions name the registered skill",
+              re.search(rf"\bmeal_manager:{re.escape(skill_name)}\b",
+                        _pkg.SKILL_POINTER) is not None,
+              f"got {_pkg.SKILL_POINTER!r}")
         # The description is the skill's whole row in the system prompt's
         # skill index; Hermes clips it at SKILL_PROMPT_DESC_LIMIT (60).
         check("the skill description fits the skill index",
@@ -2070,6 +2084,9 @@ def test_register_without_register_skill():
     expected = [name for name, _, _ in _handlers_pkg.iter_tools()]
     check("every tool still registers",
           [name for name, _, _, _ in ctx.registered] == expected)
+    originals = {n: s["description"] for n, s, _ in _handlers_pkg.iter_tools()}
+    check("no description points at a skill that was never registered",
+          all(s["description"] == originals[n] for n, _, s, _ in ctx.registered))
     check("skill.md is not sent as a chat message", ctx.injected == [],
           f"got {len(ctx.injected)} message(s)")
     check("the missing skill is logged as a warning",
