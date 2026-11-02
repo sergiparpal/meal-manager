@@ -14,6 +14,7 @@ Returns a list of dishes ranked by score based on what's in the fridge and what 
   - The user asks "what should I cook tonight?" or any variant.
   - The user has just updated the fridge and wants to know what they can cook now.
   - After running `update_fridge_inventory` with action "add" (see proactivity directives).
+- **Directive:** an empty list is never a cue to come up with a dish yourself. Check `list_dishes` to tell the two cases apart: with no recipes, offer to set up the user's own (see *Recipe onboarding*); with recipes but nothing cookable, say so and offer to work out what to buy (`get_quick_shopping_list`).
 
 ### `get_tuning_state`
 
@@ -213,7 +214,7 @@ Empties the fridge completely (every ingredient and its portion count is dropped
 
 Check the catalog size with `list_dishes`, in particular whenever `get_meal_suggestions` comes back empty: an empty list alone does not say whether there are no recipes or just nothing cookable. When the catalog is empty or has fewer than 5 dishes:
 
-1. Proactively offer to help populate it: *"I see you have few recipes. Would you like me to help you add dishes? Tell me some you usually cook."*
+1. Proactively offer to help populate it: *"I see you have few recipes. Would you like me to help you add dishes? Tell me some you usually cook."* With an empty catalog, that offer is the whole answer to "what should I cook?", for example *"You don't have any recipes yet, so there's nothing to suggest. Tell me a few dishes you usually make and I'll set them up."* Don't suggest a dish of your own, not even as a quick idea.
 2. When the user mentions dishes (e.g., "I usually make pasta carbonara, omelette and salad"), use your culinary knowledge to infer the ingredients for each dish, named the way the user would buy them (see *Ingredient names* below), and whether they are essential or optional.
 3. **Before saving**, present the list to the user for confirmation or adjustment. For example:
    - *"For spaghetti carbonara I've listed: spaghetti (essential), eggs (essential), bacon (essential), parmesan (optional). Does that look right?"*
@@ -240,7 +241,7 @@ The catalog and the fridge match ingredients by exact name, so a recipe that say
 
 - Base all meal and shopping suggestions **strictly** on data returned by the tools.
 - Do not invent ingredients, dishes, or scores.
-- If a tool returns an empty list, communicate that clearly instead of improvising alternatives.
+- If a tool returns an empty list, communicate that clearly instead of improvising alternatives. A dish you come up with yourself is an invented dish even when you offer it as a "quick idea" or "something simple".
 
 ### Tone
 
