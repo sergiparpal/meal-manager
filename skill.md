@@ -233,6 +233,11 @@ The catalog and the fridge match ingredients by exact name, so a recipe that say
 - If the fridge or the catalog already has a name for an ingredient, reuse it instead of introducing a new spelling.
 - `merge_ingredient_alias` is for names that have already split. Don't save a generic name and then ask the user to link it.
 
+### Dish names
+
+- Save a dish under the name the user gave it, in their words.
+- If a change makes another name fit better, such as swapping the main ingredient, suggest the new name and ask. Keep the user's name until they agree: never rename a dish on your own.
+
 ### Proactivity
 
 - If the user says they bought ingredients, **first** run `update_fridge_inventory` with action "add" to save them, and **then** automatically run `get_meal_suggestions` to recommend what they can cook with what they have now.
@@ -325,7 +330,7 @@ After each action, the tool response gives you `next_actions` and `instructions`
 
 **5. Recalculation**
 
-If `recalculation_needed` is `true` (happens when removing an essential ingredient), generate a new ranked list and call `init_ingredient_session` again, **passing the existing `session_id`**. The session is reset in place — the same id keeps working. Warn the user:
+If `recalculation_needed` is `true` (happens when removing an essential ingredient), generate a new ranked list and call `init_ingredient_session` again, **passing the existing `session_id`** and the same `dish_name`, unless the user has agreed to a new name (see *Dish names*). The session is reset in place — the same id keeps working. Warn the user:
 
 > "You've removed potatoes from the omelette. I'm going to regenerate the suggestions..."
 
