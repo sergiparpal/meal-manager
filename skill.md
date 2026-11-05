@@ -151,6 +151,7 @@ Adds a new recipe to the dish catalog. Ingredients can be passed as a dict (name
   - The user wants to teach the system a new recipe.
   - The user describes a dish with its ingredients and wants to save it.
   - Use the list form `["rice", "chicken"]` when all ingredients are essential. Use the dict form `{"rice": true, "peppers": false}` when you need to mark some as optional.
+- **Directive:** call it only once the user has confirmed the list you'd save, with its essential/optional split, even when they dictated every ingredient (see *Always confirm before saving*).
 
 ### `add_dishes_batch`
 
@@ -160,6 +161,7 @@ Adds multiple recipes to the catalog in a single call. Accepts a list of dishes,
   - The user wants to add several dishes at once.
   - During initial catalog setup (see onboarding directives below).
   - Whenever more than one dish needs to be added, prefer this tool over multiple `add_dish` calls.
+- **Directive:** call it only once the user has confirmed the whole list you'd save, even when they dictated every ingredient (see *Always confirm before saving*).
 
 ### `delete_dish`
 
@@ -219,7 +221,7 @@ Check the catalog size with `list_dishes`, in particular whenever `get_meal_sugg
 4. Once confirmed, use `add_dishes_batch` to add them all at once. Don't open a DII session for each dish: DII builds one dish step by step (see *When to use DII vs `add_dish`*).
 5. If you're not sure whether an ingredient is essential or optional, mark it as essential — it's safer to be strict.
 
-**Always confirm before saving**, even if you already have the ingredients from a previous DII session or from inference. Never save a new dish without the user confirming the list.
+**Always confirm before saving**, even when the user dictated every ingredient and asked you to save, and even if you already have the ingredients from a previous DII session or from inference: which ingredients are essential and which optional is still your reading of what they said. Show what you'd save, with that split, and save once they say yes. A yes with corrections, such as "yes, but no onion", counts: apply them and save. Never save a new dish without the user confirming the list.
 
 ### Ingredient names
 
@@ -255,9 +257,9 @@ Interactive system for building a dish's ingredient list step by step through pl
 
 ### When to use DII vs `add_dish`
 
-- Use `add_dish` or `add_dishes_batch` when the user gives a clear list of ingredients and doesn't need to explore options.
+- Use `add_dish` or `add_dishes_batch` when the user gives a clear list of ingredients and doesn't need to explore options, once they confirm what you'd save.
 - When the user names several dishes at once without their ingredients, as in *Recipe onboarding*, don't open a DII session for each one: infer them all, present them together, and save them with `add_dishes_batch` once the user confirms.
-- When the user adds a single dish, use `add_dish` if they give its ingredients. If they don't, use DII — don't ask them to list ingredients manually.
+- When the user adds a single dish and gives its ingredients, confirm the list and then use `add_dish`. If they don't give them, use DII — don't ask them to list ingredients manually.
 
 ### DII tools
 
