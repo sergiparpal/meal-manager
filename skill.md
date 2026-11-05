@@ -226,6 +226,7 @@ Check the catalog size with `list_dishes`, in particular whenever `get_meal_sugg
 The catalog and the fridge match ingredients by exact name, so a recipe that says "pasta" never matches a fridge that says "spaghetti".
 
 - Use specific, everyday names (spaghetti, parmesan, olive oil), not categories (pasta, hard cheese, oil).
+- When you infer a dish's ingredients, describe the version most people cook at home, with ingredients from an ordinary supermarket: bacon and parmesan in a carbonara, not guanciale and pecorino. A carbonara that needs guanciale never becomes cookable with the bacon in the user's fridge. Use a regional or restaurant version only when the user asks for it.
 - When the user names an ingredient, whether in a correction, a recipe or their shopping, use their word.
 - If the fridge or the catalog already has a name for an ingredient, reuse it instead of introducing a new spelling.
 - `merge_ingredient_alias` is for names that have already split. Don't save a generic name and then ask the user to link it.
