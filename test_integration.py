@@ -244,7 +244,7 @@ def test_list_dishes_empty_catalog():
         check("an empty catalog lists nothing",
               empty == {"dishes": [], "count": 0}, f"got {empty}")
 
-        add_dish({"name": "Toast", "ingredients": ["bread"], "instructions": "Toast it."})
+        add_dish({"dish_name": "Toast", "ingredients": ["bread"], "instructions": "Toast it."})
         listed = parse(list_dishes({}))["dishes"]
         check("flags a dish that has cooking steps",
               listed == [{"name": "toast", "essential": ["bread"], "optional": [],
@@ -317,7 +317,7 @@ def test_fridge_counts_and_staples():
 
 def test_cook_decrements_instead_of_deleting():
     print("\n-- register_cooked_meal (decrements) --")
-    add_dish({"name": "Count Dish", "ingredients": {"cnt_a": True, "cnt_b": True}})
+    add_dish({"dish_name": "Count Dish", "ingredients": {"cnt_a": True, "cnt_b": True}})
     update_fridge_inventory({"action": "set",
                              "ingredients": {"cnt_a": 3, "cnt_b": None}})
 
@@ -340,7 +340,7 @@ def test_register_cooked_meal_backdated():
     print("\n-- register_cooked_meal (backdated) --")
     from datetime import date as _date
     from datetime import timedelta as _timedelta
-    add_dish({"name": "Backdate Dish", "ingredients": {"bd_a": True}})
+    add_dish({"dish_name": "Backdate Dish", "ingredients": {"bd_a": True}})
     update_fridge_inventory({"action": "set", "ingredients": {"bd_a": 2}})
 
     past = (_date.today() - _timedelta(days=4)).isoformat()
@@ -364,7 +364,7 @@ def test_register_cooked_meal_backdate_preserves_newer():
     print("\n-- register_cooked_meal (backdating keeps the newer entry) --")
     from datetime import date as _date
     from datetime import timedelta as _timedelta
-    add_dish({"name": "Paella Reciente", "ingredients": {"pr_a": True}})
+    add_dish({"dish_name": "Paella Reciente", "ingredients": {"pr_a": True}})
     update_fridge_inventory({"action": "set", "ingredients": {"pr_a": 10}})
 
     register_cooked_meal({"dish_name": "Paella Reciente"})
@@ -553,7 +553,7 @@ def test_delete_history_entry_bogus():
 def test_add_dish_dict():
     print("\n-- add_dish (dict ingredients) --")
     result = parse(add_dish({
-        "name": "Ensalada",
+        "dish_name": "Ensalada",
         "ingredients": {"lechuga": True, "tomate": True, "aceitunas": False},
     }))
     check("success message", isinstance(result, str) and "added" in result.lower(), f"got: {result}")
@@ -562,7 +562,7 @@ def test_add_dish_dict():
 def test_add_dish_list():
     print("\n-- add_dish (list ingredients) --")
     result = parse(add_dish({
-        "name": "Pasta Sencilla",
+        "dish_name": "Pasta Sencilla",
         "ingredients": ["pasta", "aceite"],
     }))
     check("success message", isinstance(result, str) and "added" in result.lower(), f"got: {result}")
@@ -571,7 +571,7 @@ def test_add_dish_list():
 def test_add_dish_duplicate():
     print("\n-- add_dish (duplicate) --")
     result = parse(add_dish({
-        "name": "Ensalada",
+        "dish_name": "Ensalada",
         "ingredients": {"lechuga": True},
     }))
     check("returns error for duplicate", isinstance(result, dict) and "error" in result, f"got: {result}")
@@ -580,13 +580,13 @@ def test_add_dish_duplicate():
 def test_add_dish_invalid_inputs():
     print("\n-- add_dish (invalid inputs) --")
     blank_name = parse(add_dish({
-        "name": "   ",
+        "dish_name": "   ",
         "ingredients": {"lechuga": True},
     }))
     check("rejects blank name", isinstance(blank_name, dict) and "error" in blank_name)
 
     bad_ingredient = parse(add_dish({
-        "name": "Sopa Rara",
+        "dish_name": "Sopa Rara",
         "ingredients": {"caldo": "yes"},
     }))
     check("rejects non-boolean ingredient values", isinstance(bad_ingredient, dict) and "error" in bad_ingredient)
@@ -894,8 +894,8 @@ def test_online_weight_tuning():
     # Give the two dishes opposing profiles so the ranking depends on w and the
     # cook produces a real (non-skipped) learning event: A is well-rested but has
     # no optionals, B has three optionals in stock but was cooked recently.
-    add_dish({"name": "Tuning Dish A", "ingredients": {"tun_a": True}})
-    add_dish({"name": "Tuning Dish B", "ingredients": {
+    add_dish({"dish_name": "Tuning Dish A", "ingredients": {"tun_a": True}})
+    add_dish({"dish_name": "Tuning Dish B", "ingredients": {
         "tun_b": True, "tun_o1": False, "tun_o2": False, "tun_o3": False,
     }})
     update_fridge_inventory({"action": "set", "ingredients": {
@@ -939,7 +939,7 @@ def test_online_weight_tuning():
 
 def test_missing_required_arg_message():
     print("\n-- validation: missing required arg yields a clear message --")
-    res = parse(add_dish({"name": "No Ingredients"}))
+    res = parse(add_dish({"dish_name": "No Ingredients"}))
     check("missing 'ingredients' reported clearly",
           "error" in res and "ingredients" in res["error"]
           and "required" in res["error"].lower(), f"got: {res}")
@@ -953,7 +953,7 @@ def test_history_event_log_on_disk():
     print("\n-- register_cooked_meal writes a v2 event log --")
     from datetime import date as _date
     from datetime import timedelta as _timedelta
-    add_dish({"name": "Log Dish", "ingredients": {"log_a": True}})
+    add_dish({"dish_name": "Log Dish", "ingredients": {"log_a": True}})
     update_fridge_inventory({"action": "set", "ingredients": {"log_a": 5}})
 
     register_cooked_meal({"dish_name": "Log Dish"})
@@ -982,7 +982,7 @@ def test_history_event_log_on_disk():
 
 def test_history_rollback_hard_deletes_the_event():
     print("\n-- register_cooked_meal rollback leaves no trace --")
-    add_dish({"name": "Rollback Dish", "ingredients": {"rb_a": True}})
+    add_dish({"dish_name": "Rollback Dish", "ingredients": {"rb_a": True}})
     update_fridge_inventory({"action": "set", "ingredients": {"rb_a": 5}})
     before = len(_repos_mod.history_repo.load_events())
 
@@ -1008,7 +1008,7 @@ def test_history_rollback_hard_deletes_the_event():
 
 def test_delete_history_entry_releases_the_cooldown():
     print("\n-- delete_history_entry releases the recency cooldown --")
-    add_dish({"name": "Cooldown Dish", "ingredients": {"cd_a": True}})
+    add_dish({"dish_name": "Cooldown Dish", "ingredients": {"cd_a": True}})
     update_fridge_inventory({"action": "set", "ingredients": {"cd_a": 5}})
     register_cooked_meal({"dish_name": "Cooldown Dish"})
 
@@ -1032,8 +1032,8 @@ def test_list_cooking_history():
     check("empty history returns no rows",
           empty.get("events") == [] and empty.get("count") == 0, f"got {empty}")
 
-    add_dish({"name": "Hist One", "ingredients": {"h_a": True}})
-    add_dish({"name": "Hist Two", "ingredients": {"h_b": True}})
+    add_dish({"dish_name": "Hist One", "ingredients": {"h_a": True}})
+    add_dish({"dish_name": "Hist Two", "ingredients": {"h_b": True}})
     update_fridge_inventory({"action": "set", "ingredients": {"h_a": 9, "h_b": 9}})
     register_cooked_meal({"dish_name": "Hist One"})
     register_cooked_meal({"dish_name": "Hist Two"})
@@ -1192,7 +1192,7 @@ def _clear_aliases():
 def test_merge_ingredient_alias_catalog_only():
     print("\n-- merge_ingredient_alias (catalog only) --")
     _clear_aliases()
-    add_dish({"name": "Alias Cat", "ingredients": {"al_tomates": True, "al_sal": False}})
+    add_dish({"dish_name": "Alias Cat", "ingredients": {"al_tomates": True, "al_sal": False}})
 
     res = parse(merge_ingredient_alias({"from_name": "al_tomates", "to_name": "al_tomate"}))
     check("reports the dish it rewrote",
@@ -1291,7 +1291,7 @@ def test_merge_ingredient_alias_keeps_expiry():
 def test_merge_ingredient_alias_essential_wins():
     print("\n-- merge_ingredient_alias (essential wins) --")
     _clear_aliases()
-    add_dish({"name": "Alias Ess", "ingredients": {"al_e_opt": False, "al_e_ess": True}})
+    add_dish({"dish_name": "Alias Ess", "ingredients": {"al_e_opt": False, "al_e_ess": True}})
 
     merge_ingredient_alias({"from_name": "al_e_opt", "to_name": "al_e_ess"})
     recipe = parse(get_dish_recipe({"dish_name": "Alias Ess"}))
@@ -1302,7 +1302,7 @@ def test_merge_ingredient_alias_essential_wins():
           f"got {recipe}")
 
     _clear_aliases()
-    add_dish({"name": "Alias Ess2", "ingredients": {"al_e2_ess": True, "al_e2_opt": False}})
+    add_dish({"dish_name": "Alias Ess2", "ingredients": {"al_e2_ess": True, "al_e2_opt": False}})
     merge_ingredient_alias({"from_name": "al_e2_ess", "to_name": "al_e2_opt"})
     recipe2 = parse(get_dish_recipe({"dish_name": "Alias Ess2"}))
     check("essential wins in the other direction too",
@@ -1329,7 +1329,7 @@ def test_merge_ingredient_alias_boundary_resolution():
 def test_merge_ingredient_alias_unlocks_a_dish():
     print("\n-- merge_ingredient_alias (unlocks a previously uncookable dish) --")
     _clear_aliases()
-    add_dish({"name": "Alias Unlock", "ingredients": {"al_u_tomates": True}})
+    add_dish({"dish_name": "Alias Unlock", "ingredients": {"al_u_tomates": True}})
     update_fridge_inventory({"action": "set", "ingredients": {"al_u_tomate": 5}})
 
     before = parse(get_meal_suggestions({}))
@@ -1368,7 +1368,7 @@ def test_merge_ingredient_alias_errors():
 def test_dish_instructions_roundtrip():
     print("\n-- set_dish_instructions / get_dish_recipe --")
     add_dish({
-        "name": "Recipe Test",
+        "dish_name": "Recipe Test",
         "ingredients": {"harina": True, "azucar": False},
     })
 
@@ -1400,7 +1400,7 @@ def test_dish_instructions_roundtrip():
 
 def test_edit_dish_preserves_instructions():
     print("\n-- edit_dish preserves instructions --")
-    add_dish({"name": "Preserve Test", "ingredients": {"a": True}})
+    add_dish({"dish_name": "Preserve Test", "ingredients": {"a": True}})
     set_dish_instructions({
         "dish_name": "Preserve Test",
         "instructions": "Step one. Step two.",
@@ -1443,7 +1443,7 @@ def test_dish_instructions_errors():
 def test_add_dish_with_instructions():
     print("\n-- add_dish (instructions argument) --")
     add_dish({
-        "name": "Inline Recipe",
+        "dish_name": "Inline Recipe",
         "ingredients": ["agua"],
         "instructions": "Boil it.",
     })
@@ -1453,7 +1453,7 @@ def test_add_dish_with_instructions():
 
     # A dish added without instructions must not write the key at all, so an
     # existing dishes.json round-trips with no diff.
-    add_dish({"name": "No Recipe", "ingredients": ["agua"]})
+    add_dish({"dish_name": "No Recipe", "ingredients": ["agua"]})
     raw = json.loads((_TMP_DATA_DIR / "dishes.json").read_text(encoding="utf-8"))
     row = next(d for d in raw["dishes"] if d.get("name") == "no recipe")
     check("dish without instructions omits the key on disk",
@@ -1463,11 +1463,11 @@ def test_add_dish_with_instructions():
 def test_unknown_argument_rejected():
     print("\n-- validation: unknown arguments are rejected --")
     res = parse(add_dish({
-        "dish_name": "Wrong Key",  # the real argument is 'name'
+        "name": "Wrong Key",  # the real argument is 'dish_name', like every other dish tool
         "ingredients": {"a": True},
     }))
     check("unknown argument returns an error envelope",
-          "error" in res and "dish_name" in res["error"], f"got: {res}")
+          "error" in res and "'name'" in res["error"], f"got: {res}")
 
     res2 = parse(list_fridge({"limit": 5}))
     check("no-argument tool also rejects unknown keys",
@@ -1516,7 +1516,7 @@ def test_dii_remove_optional_no_recalc():
 
 def test_edit_dish_empty_rejected():
     print("\n-- edit_dish: empty ingredient set rejected (no silent wipe) --")
-    add_dish({"name": "Guardable", "ingredients": {"x": True, "y": False}})
+    add_dish({"dish_name": "Guardable", "ingredients": {"x": True, "y": False}})
     res = parse(edit_dish({"dish_name": "Guardable", "ingredients": []}))
     check("empty edit returns an error", "error" in res, f"got: {res}")
     guard = next((d for d in _repos_mod.dish_repo.load() if d.name == "guardable"), None)
@@ -1527,7 +1527,7 @@ def test_edit_dish_empty_rejected():
 
 def test_dii_finalize_empty_selection_no_wipe():
     print("\n-- DII: finalize with empty selection does not wipe a recipe --")
-    add_dish({"name": "Precious", "ingredients": {"p": True, "q": False}})
+    add_dish({"dish_name": "Precious", "ingredients": {"p": True, "q": False}})
     state = parse(init_ingredient_session({
         "dish_name": "Precious",
         "ingredients": ["p"],
@@ -1887,7 +1887,7 @@ def test_dish_load_preserves_malformed():
     # Adding a valid dish whose name collides with the preserved malformed row
     # must NOT create a permanent duplicate-named ghost: the malformed twin is
     # dropped in favour of the live dish.
-    add_dish({"name": "legacy", "ingredients": {"real": True}})
+    add_dish({"dish_name": "legacy", "ingredients": {"real": True}})
     raw2 = json.loads((_TMP_DATA_DIR / "dishes.json").read_text())
     legacy_rows = [d for d in raw2["dishes"] if d.get("name") == "legacy"]
     check("no duplicate-named ghost after re-adding the name",
@@ -1935,6 +1935,12 @@ def test_iter_tools_discovers_every_handler():
     check("every SCHEMA has a non-empty description", bad_desc == [], f"got {bad_desc}")
     check("every HANDLER is callable", all(callable(h) for _, _, h in tools))
     check("iteration order is alphabetical", names == sorted(names), f"got {names}")
+
+    # add_dish used to take `name` while every other dish tool took `dish_name`,
+    # and agents kept sending it `dish_name`. One spelling, everywhere.
+    takes_name = [n for n, s, _ in tools if "name" in s.get("properties", {})]
+    check("no tool takes a top-level `name` argument (dish tools use `dish_name`)",
+          takes_name == [], f"got {takes_name}")
 
 
 def test_plugin_yaml_matches_registered_tools():
