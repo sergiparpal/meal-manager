@@ -19,7 +19,7 @@ SCHEMA = {
     ),
     "type": "object",
     "properties": {
-        "name": {
+        "dish_name": {
             "type": "string",
             "description": "name of the new dish",
         },
@@ -50,14 +50,14 @@ SCHEMA = {
             ),
         },
     },
-    "required": ["name", "ingredients"],
+    "required": ["dish_name", "ingredients"],
 }
 
 
 @tool_handler(NAME, SCHEMA)
 def HANDLER(args: dict, **kwargs):
     ingredients = normalize_ingredients(require_arg(args, "ingredients"))
-    name = normalize_dish_name(require_arg(args, "name"))
+    name = normalize_dish_name(require_arg(args, "dish_name"))
     instructions = args.get("instructions")
 
     with dish_repo.lock:
