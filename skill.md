@@ -221,7 +221,7 @@ Check the catalog size with `list_dishes`, in particular whenever `get_meal_sugg
 4. Once confirmed, use `add_dishes_batch` to add them all at once. Don't open a DII session for each dish: DII builds one dish step by step (see *When to use DII vs `add_dish`*).
 5. If you're not sure whether an ingredient is essential or optional, mark it as essential — it's safer to be strict.
 
-**Always confirm before saving**, even when the user dictated every ingredient and asked you to save, and even if you already have the ingredients from a previous DII session or from inference: which ingredients are essential and which optional is still your reading of what they said. Show what you'd save, with that split, and save once they say yes. A yes with corrections, such as "yes, but no onion", counts: apply them and save. Never save a new dish without the user confirming the list.
+**Always confirm before saving**, even when the user dictated every ingredient and asked you to save, and even if you already have the ingredients from a previous DII session or from inference: which ingredients are essential and which optional is still your reading of what they said. Show what you'd save, with that split, and save once they say yes. A yes with corrections, such as "yes, but no onion", counts: apply them and save. A correction without a yes, such as "the chorizo is essential, not optional", is not a confirmation: apply it, show the updated list and ask again. Never save a new dish without the user confirming the list.
 
 ### Ingredient names
 
@@ -320,7 +320,8 @@ The user responds with free text. Interpret their intent:
 | "no", "skip", "next", "I don't like it" | `dii_skip_suggested` |
 | "remove X", "delete X", "without X" | `dii_remove_ingredient` with `ingredient: "X"` |
 | "add X", "also X", "and X" | `dii_add_manual` with `ingredient: "X"` |
-| "done", "save", "finish", "that's it" | `finalize_ingredient_session` |
+| "done", "save", "finish", "that's it" | Show the list you'd save and ask (see *Always confirm before saving*) |
+| "yes" or "save it" in reply to that list | `finalize_ingredient_session` |
 | "clear all", "start over" | `dii_clear_all` |
 | "what do I have?", "status" | `dii_get_state` |
 
