@@ -1,0 +1,41 @@
+name: semantic-diff-weaver
+
+# Field test of semantic-diff-weaver: on each pull request it comments what the change does in
+# behavior and what to test, and keeps the analysis as an artifact so that each finding can be
+# judged afterwards. Advisory only: it is deliberately outside ci-complete and gates nothing.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# A later push supersedes the review of the one before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Dependabot's pull requests get a read-only token, which cannot post the comment.
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # fetch-depth: 0 is required: the analyzer reads committed objects and never fetches.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: weaver
+        uses: sergiparpal/semantic-diff-weaver@6e5f5f77061dadb49f8f689e34c9ceb1f1561f8c # v0.19.0
+        with:
+          include: |
+            __init__.py
+            src/**/*.py
+          fail-on: none
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.weaver.outputs.analysis != ''
+        with:
+          name: semantic-diff-weaver-analysis
+          path: ${{ steps.weaver.outputs.analysis }}
+          retention-days: 90
