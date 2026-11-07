@@ -2019,6 +2019,27 @@ def test_register_wires_every_tool():
         check("schemas and handlers are passed through",
               all(isinstance(s, dict) and callable(h)
                   for _, _, s, h in ctx.registered))
+        # Hermes sends {**schema, "name": name} to the model and reads the
+        # arguments from "parameters". Registered as plain JSON Schema, every
+        # tool reached the model with no arguments, and the agent guessed them.
+        sources = {n: s for n, s, _ in _handlers_pkg.iter_tools()}
+        misshapen = [n for n, _, s, _ in ctx.registered
+                     if set(s) != {"name", "description", "parameters"} or s["name"] != n]
+        check("every schema is in the function shape Hermes reads",
+              misshapen == [], f"got {misshapen}")
+        unmatched = [n for n, _, s, _ in ctx.registered
+                     if s.get("parameters") != {k: v for k, v in sources[n].items()
+                                                if k != "description"}]
+        check("every tool's arguments reach the host under parameters",
+              unmatched == [], f"got {unmatched}")
+        not_objects = [n for n, _, s, _ in ctx.registered
+                       if s.get("parameters", {}).get("type") != "object"]
+        check("every parameters block is a JSON Schema object",
+              not_objects == [], f"got {not_objects}")
+        probe_name, _, probe_schema, _ = ctx.registered[0]
+        probe_schema["parameters"].setdefault("properties", {})["__probe__"] = {}
+        check("registered schemas share nothing with the handler SCHEMAs",
+              "__probe__" not in sources[probe_name].get("properties", {}))
         # Hermes v0.22.5 sends some models looking for the skill under a
         # ``plugin:`` prefix that does not resolve; the exact name has to
         # reach them in the descriptions they read before calling a tool.
@@ -2093,6 +2114,9 @@ def test_register_without_register_skill():
     originals = {n: s["description"] for n, s, _ in _handlers_pkg.iter_tools()}
     check("no description points at a skill that was never registered",
           all(s["description"] == originals[n] for n, _, s, _ in ctx.registered))
+    check("schemas still reach the host in the function shape",
+          all(set(s) == {"name", "description", "parameters"}
+              for _, _, s, _ in ctx.registered))
     check("skill.md is not sent as a chat message", ctx.injected == [],
           f"got {len(ctx.injected)} message(s)")
     check("the missing skill is logged as a warning",
