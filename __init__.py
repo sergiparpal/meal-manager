@@ -1,5 +1,6 @@
 """meal_manager – Hermes plugin entry point."""
 
+import copy
 import logging
 from pathlib import Path
 
@@ -30,6 +31,30 @@ SKILL_POINTER = (
 )
 
 
+def _function_schema(name: str, schema: dict, *, pointer: str = "") -> dict:
+    """*schema* in the OpenAI function shape Hermes hands the model.
+
+    Hermes sends ``{**schema, "name": name}`` as the function definition and
+    reads the arguments from its ``parameters`` key. A handler's ``SCHEMA`` is
+    plain JSON Schema with the description on top, so passed as it was, every
+    tool reached the model with no arguments at all: the agent only knew the
+    argument names skill.md happened to show, and guessed the rest.
+
+    Built from a deep copy, so the handler module's ``SCHEMA`` keeps its own
+    description and shape whatever the host does with the result.
+    """
+    parameters = {
+        key: copy.deepcopy(value)
+        for key, value in schema.items()
+        if key != "description"
+    }
+    return {
+        "name": name,
+        "description": schema["description"] + pointer,
+        "parameters": parameters,
+    }
+
+
 def register(ctx, *, data_dir: Path | str | None = None):
     """Register all meal_manager tools and the skill with the Hermes context.
 
@@ -54,12 +79,12 @@ def register(ctx, *, data_dir: Path | str | None = None):
     # skill never reached the model.
     register_skill = getattr(ctx, "register_skill", None)
 
+    # Point at the skill only where the host can register it.
+    pointer = SKILL_POINTER if register_skill is not None else ""
     for name, schema, handler in iter_tools():
-        # Point at the skill only where the host can register it, and on a
-        # copy, so the handler module's SCHEMA keeps its own description.
-        if register_skill is not None:
-            schema = {**schema, "description": schema["description"] + SKILL_POINTER}
-        ctx.register_tool(name, "meal_manager", schema, handler)
+        ctx.register_tool(
+            name, "meal_manager", _function_schema(name, schema, pointer=pointer), handler
+        )
 
     if register_skill is None:
         logger.warning(

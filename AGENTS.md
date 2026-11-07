@@ -190,6 +190,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 ## Tool And Schema Notes
 
 - Keep each handler module's `SCHEMA["description"]` in sync with the actual handler behavior — schema and code live side by side.
+- Keep `SCHEMA` plain JSON Schema with `description` on top, and never add a `parameters` key: `register()` rebuilds it into the `{name, description, parameters}` function shape Hermes reads, and a pre-wrapped schema would be wrapped twice.
 - Keep `plugin.yaml` aligned with the modules under `src/handlers/` (the auto-registration is the source of truth for what is registered, but `plugin.yaml` is read by Hermes for discovery).
 - Keep `skill.md` aligned with DII behavior and user-facing interaction flow.
 - Use `README.md` as the source of truth for the high-level project summary and examples.
