@@ -183,14 +183,14 @@ Example phrases and what the agent will do behind the scenes:
 **Managing the fridge**
 
 - *"What do I have in the fridge?"* — returns the current inventory.
-- *"Empty the fridge, I'm going on vacation."* — clears all fridge contents.
+- *"Empty the fridge, I'm going on vacation."* — says how many ingredients would go, pantry staples included, and clears them once you say yes.
 
 **Teaching new recipes**
 
 - *"I usually make potato omelette."* — the agent infers ingredients from culinary knowledge, shows them for your confirmation, then saves the recipe.
 - *"Add lasagna, cannelloni, and paella to my recipes."* — adds several dishes in a single pass.
 - *"Carbonara doesn't carry cream, fix the recipe."* — replaces the ingredient list of an existing dish.
-- *"Delete the chicken curry recipe."* — removes it from the catalog.
+- *"Delete the chicken curry recipe."* — asks you to confirm, then removes it from the catalog.
 - *"What recipes do I have saved?"* — lists every dish in your catalog and what goes into it.
 
 **Correcting mistakes**

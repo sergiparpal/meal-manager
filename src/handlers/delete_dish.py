@@ -13,7 +13,9 @@ NAME = "delete_dish"
 SCHEMA = {
     "description": (
         "Remove a recipe from the catalog. Use when the user wants to "
-        "delete a dish they no longer cook or that was added by mistake."
+        "delete a dish they no longer cook or that was added by mistake. "
+        "It cannot be undone: name the dish as saved and call it only "
+        "after the user says yes."
     ),
     "type": "object",
     "properties": {
