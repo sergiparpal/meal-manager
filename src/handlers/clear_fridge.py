@@ -7,8 +7,10 @@ NAME = "clear_fridge"
 
 SCHEMA = {
     "description": (
-        "Empty the fridge completely. Use when the user wants to reset the "
-        "fridge inventory, e.g. after a move or a full cleanout."
+        "Empty the fridge completely, pantry staples included. Use when the "
+        "user wants to reset the fridge inventory, e.g. after a move or a "
+        "full cleanout. It cannot be undone: say what would go and call it "
+        "only after the user says yes."
     ),
     "type": "object",
     "properties": {},
