@@ -933,6 +933,74 @@ def test_online_weight_tuning():
           isinstance(ts.get("candidates"), list) and len(ts["candidates"]) > 0)
 
 
+def test_tuning_reports_last_change():
+    print("\n-- get_tuning_state: the last change to the blend --")
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
+
+    today = _date.today()
+    _repos_mod.tuning_repo.save(_tuning_mod.initialize_state())
+    ts = parse(get_tuning_state({}))
+    check("a fresh learner has no change on record", ts.get("last_change") is None, f"got {ts}")
+    check("reports the default blend",
+          ts.get("default_availability_weight") == _tuning_mod.PRIOR_W
+          and abs(ts["default_availability_weight"] + ts["default_recency_weight"] - 1.0) < 1e-9,
+          f"got {ts}")
+    check("reports where learning starts",
+          ts.get("learning_starts_at") == _tuning_mod.MIN_OBSERVATIONS, f"got {ts}")
+
+    # One observation short of the end of the cold start, every past cook ranked
+    # first by a low availability weight: the next cook that teaches the learner
+    # anything moves the blend.
+    low = {f"{w:.2f}": (1.0 if w <= 0.50 else 0.0) for w in _tuning_mod.CANDIDATES}
+    state = _tuning_mod.initialize_state()
+    for _ in range(_tuning_mod.MIN_OBSERVATIONS - 1):
+        state = _tuning_mod.select_deployed(_tuning_mod.apply_update(state, low))
+    _repos_mod.tuning_repo.save(state)
+
+    # Two dishes the weight orders differently: the old one has no optionals and
+    # was never cooked, the fresh one has three optionals in stock but was cooked
+    # three days ago. A low availability weight ranks the old one higher.
+    add_dish({"dish_name": "Last Change Old", "ingredients": {"lc_old": True}})
+    add_dish({"dish_name": "Last Change Fresh", "ingredients": {
+        "lc_fresh": True, "lc_o1": False, "lc_o2": False, "lc_o3": False,
+    }})
+    update_fridge_inventory({"action": "set", "ingredients": {
+        "lc_old": 5, "lc_fresh": 5, "lc_o1": None, "lc_o2": None, "lc_o3": None,
+    }})
+    _repos_mod.history_repo.append_event(
+        "last change fresh", (today - _timedelta(days=3)).isoformat()
+    )
+
+    register_cooked_meal({"dish_name": "Last Change Old"})
+    ts = parse(get_tuning_state({}))
+    change = ts.get("last_change") or {}
+    check("the cook ended the cold start", ts["observations"] == _tuning_mod.MIN_OBSERVATIONS
+          and ts["learning_active"] is True, f"got {ts}")
+    check("the move is dated today, at that observation",
+          change.get("on") == today.isoformat()
+          and change.get("observations") == _tuning_mod.MIN_OBSERVATIONS, f"got {change}")
+    check("it moved from the default blend",
+          change.get("from") == {"availability_weight": _tuning_mod.PRIOR_W,
+                                 "recency_weight": round(1 - _tuning_mod.PRIOR_W, 4)},
+          f"got {change}")
+    check("to the blend now deployed",
+          change.get("to") == {"availability_weight": ts["availability_weight"],
+                               "recency_weight": ts["recency_weight"]}
+          and ts["availability_weight"] < _tuning_mod.PRIOR_W, f"got {ts}")
+
+    # A backdated cook does not learn, so it cannot move the blend either.
+    register_cooked_meal({"dish_name": "Last Change Fresh",
+                          "date": (today - _timedelta(days=1)).isoformat()})
+    check("a backdated cook leaves the record alone",
+          parse(get_tuning_state({}))["last_change"] == ts["last_change"])
+
+    # Put the catalog back as it was, and the learner back on its default blend.
+    delete_dish({"dish_name": "Last Change Old"})
+    delete_dish({"dish_name": "Last Change Fresh"})
+    _repos_mod.tuning_repo.save(_tuning_mod.initialize_state())
+
+
 # ---------------------------------------------------------------------------
 # Regression tests for the review fixes
 # ---------------------------------------------------------------------------
@@ -2207,6 +2275,7 @@ def main():
         # Online weight tuning (self-contained; runs late so it cannot perturb
         # the fridge/catalog state the earlier assertions depend on).
         run(test_online_weight_tuning)
+        run(test_tuning_reports_last_change)
 
         # Ingredient expiry. Self-contained: uses its own exp_* keys.
         run(test_fridge_expiry_end_to_end)

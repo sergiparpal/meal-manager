@@ -29,7 +29,7 @@ The result is a system that offers the user the freedom of conversation while gu
 ## Features
 
 - **Smart Meal Suggestions** — Ranks every dish in the catalog using a weighted scoring algorithm that combines ingredient availability with cooking recency (starting at a 60/40 blend). Availability is measured over *optional* ingredients only: essentials are a gate, since a dish missing one is not offered at all. Dishes cooked fewer than 2 days ago are automatically excluded.
-- **Adaptive Suggestion Weights** — The availability/recency blend self-adjusts with use. Each cooked meal feeds a bounded, deterministic online learner (no background job, no randomness) that nudges the weighting toward whatever has been ranking your actual choices best. The current blend and learning status are inspectable at any time via `get_tuning_state`, and a fresh install behaves exactly like the classic 60/40 blend until enough meals accumulate.
+- **Adaptive Suggestion Weights** — The availability/recency blend self-adjusts with use. Each cooked meal feeds a bounded, deterministic online learner (no background job, no randomness) that nudges the weighting toward whatever has been ranking your actual choices best. The current blend, when it last changed, and the learning status are inspectable at any time via `get_tuning_state`, and a fresh install behaves exactly like the classic 60/40 blend until enough meals accumulate.
 - **Unlock-Ranked Shopping List** — Identifies ingredients that, once purchased, unlock entirely new dishes, ranked by the size of the smallest basket that actually gets you to a meal, then by how many dishes each ingredient reaches at that size, then by projected score. Every field on a row describes the same basket, so a row never advertises a meal its own basket cannot buy. Defaults to single-ingredient unlocks; raise `max_missing` to 2-3 when the fridge is nearly empty and no one-item unlock exists.
 - **What a Dish Still Needs** — `get_missing_for_dish` answers "can I make this tonight?" for a named dish, splitting what is missing into blocking essentials and score-only optionals.
 - **Fridge Inventory Management** — Add, remove, or set ingredients as you shop or cook, tracked as approximate portion counts rather than an all-or-nothing list. Pantry staples (salt, oil, spices) are marked unlimited and never run out. Ingredient and dish names are normalized to lowercase for consistent matching.
@@ -220,7 +220,7 @@ The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `_
 | `get_meal_suggestions` | Returns a ranked list of dishes you can cook right now |
 | `get_quick_shopping_list` | Returns purchases that unlock new dishes, cheapest real unlock first |
 | `get_missing_for_dish` | Reports what one named dish is still missing, split into essentials and optionals |
-| `get_tuning_state` | Reports the current self-adjusted availability/recency blend and learning status |
+| `get_tuning_state` | Reports the current self-adjusted availability/recency blend, when it last changed, and learning status |
 | `update_fridge_inventory` | Adds, removes, or sets fridge ingredients and their portion counts |
 | `register_cooked_meal` | Logs a dish as cooked (today or a given date) and consumes one portion of each essential |
 | `delete_history_entry` | Undo for `register_cooked_meal` — retracts the most recent cook of a dish |
@@ -479,6 +479,7 @@ meal-manager/
 ```
 
 - `deployed_match_weight` / `deployed_time_weight` are the currently deployed availability/recency weights (they sum to 1.0).
+- `last_change` appears once the deployed weight first moves, for example `{"on": "2026-11-09", "observations": 20, "from_match_weight": 0.60, "to_match_weight": 0.40}`. Only the latest move is kept. `get_tuning_state` reports it, so the agent can say why suggestions changed.
 - A missing or corrupt file falls back to a fresh initialized state, reproducing the classic 60/40 blend.
 - The state carries a `version`. When the scoring geometry changes, the version is bumped and any file written under the old geometry is discarded on load — accumulated reward mass from a different score model is not comparable. The learner simply restarts from the 60/40 anchor.
 
