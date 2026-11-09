@@ -24,6 +24,7 @@ standard library and persists state in JSON files under `data/`.
   - `fridge.json`: flat array of names → `{name: count}` object (`null` = pantry staple, `0` = out of stock) → values may also be `{"count": n, "expires_on": "YYYY-MM-DD"}`. Entries without an expiry are still written as bare scalars.
   - `history.json`: `{dish: date}` → `{"schema_version": 2, "events": [...]}`, an append-only log. Legacy ids are derived with `uuid5` so re-migrating is idempotent.
   - `dishes.json`: dishes may carry `instructions`; the key is emitted only when set, so untouched catalogs do not churn.
+  - `tuning.json`: the state may carry `last_change`, the latest move of the deployed weight. It is written only when the weight moves, and a file without it reads as "no move on record".
 
 ## Core Commands
 

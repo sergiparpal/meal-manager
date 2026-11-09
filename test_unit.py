@@ -1323,6 +1323,89 @@ def test_tuning_shift_after_warmup():
           abs(state["deployed_match_weight"] + state["deployed_time_weight"] - 1.0) < 1e-9)
 
 
+def test_tuning_note_deploy_change():
+    print("\n-- tuning.note_deploy_change --")
+    before = tuning.initialize_state()
+    same = tuning.select_deployed(
+        tuning.apply_update(before, {tuning._key(w): 1.0 for w in tuning.CANDIDATES})
+    )
+    check("no move: returns the state itself",
+          tuning.note_deploy_change(before, same, "2026-11-09", "lentejas") is same)
+    check("no move: nothing recorded", "last_change" not in same)
+
+    moved = dict(same, deployed_match_weight=0.40, deployed_time_weight=0.6)
+    snapshot = copy.deepcopy(moved)
+    noted = tuning.note_deploy_change(before, moved, "2026-11-09", "lentejas")
+    check("a move is recorded: date, dish, observation count, before and after",
+          noted.get("last_change") == {
+              "on": "2026-11-09", "dish": "lentejas", "observations": moved["observations"],
+              "from_match_weight": tuning.PRIOR_W, "to_match_weight": 0.40,
+          }, f"got {noted.get('last_change')}")
+    check("pure: the input is left unchanged", moved == snapshot)
+
+    # The next update that leaves the weight where it is keeps the record.
+    steady = dict(noted, observations=noted["observations"] + 1)
+    check("a later update that does not move keeps the earlier record",
+          tuning.note_deploy_change(noted, steady, "2026-11-10", "tortilla")["last_change"]["on"] == "2026-11-09")
+
+
+def test_tuning_records_the_move_out_of_cold_start():
+    print("\n-- tuning: the move out of the cold start is recorded --")
+    # Every cook ranked first by an availability weight of 0.50 or less: the
+    # learner holds the prior through the cold start, then moves on the cook
+    # that ends it. That move is exactly what "why did my suggestions change?"
+    # needs to hear about.
+    low = {tuning._key(w): (1.0 if w <= 0.50 else 0.0) for w in tuning.CANDIDATES}
+    state = tuning.initialize_state()
+    for _ in range(tuning.MIN_OBSERVATIONS - 1):
+        state = tuning.note_deploy_change(
+            state, tuning.select_deployed(tuning.apply_update(state, low)), "2026-11-08", "garbanzos"
+        )
+    check("nothing recorded during the cold start", tuning.last_change(state) is None,
+          f"got {state.get('last_change')}")
+    warm = tuning.note_deploy_change(
+        state, tuning.select_deployed(tuning.apply_update(state, low)), "2026-11-09", "lentejas"
+    )
+    change = tuning.last_change(warm)
+    check("the move is recorded on the cook that ends the cold start",
+          change is not None and change["on"] == "2026-11-09" and change["dish"] == "lentejas"
+          and change["observations"] == tuning.MIN_OBSERVATIONS
+          and change["from_match_weight"] == tuning.PRIOR_W
+          and change["to_match_weight"] == warm["deployed_match_weight"] <= 0.50,
+          f"got {change}, deployed {warm['deployed_match_weight']}")
+    check("the record survives validate_state", tuning.validate_state(warm) is warm)
+
+
+def test_tuning_last_change_reader():
+    print("\n-- tuning.last_change (safe reader) --")
+    good = {"on": "2026-11-09", "dish": "lentejas", "observations": 20,
+            "from_match_weight": 0.6, "to_match_weight": 0.4}
+    check("reads a valid record", tuning.last_change({"last_change": dict(good)}) == good)
+    check("nothing on record", tuning.last_change(tuning.initialize_state()) is None)
+    check("not a state at all", tuning.last_change("nope") is None)
+    malformed = {
+        "record not an object": "2026-11-09",
+        "date missing": {k: v for k, v in good.items() if k != "on"},
+        "date not ISO": dict(good, on="09/11/2026"),
+        "date not canonical": dict(good, on="20261109"),
+        "date not a string": dict(good, on=20261109),
+        "dish missing": {k: v for k, v in good.items() if k != "dish"},
+        "dish not a string": dict(good, dish=["lentejas"]),
+        "dish blank": dict(good, dish="  "),
+        "count is a bool": dict(good, observations=True),
+        "count negative": dict(good, observations=-1),
+        "count a string": dict(good, observations="20"),
+        "weight missing": {k: v for k, v in good.items() if k != "from_match_weight"},
+        "weight NaN": dict(good, from_match_weight=float("nan")),
+        "weight infinite": dict(good, to_match_weight=float("inf")),
+        "weight a bool": dict(good, to_match_weight=True),
+        "weight out of band": dict(good, to_match_weight=0.9),
+    }
+    for label, record in malformed.items():
+        check(f"malformed ({label}) reads as nothing on record",
+              tuning.last_change({"last_change": record}) is None)
+
+
 def test_dish_rejects_invalid_ingredient_values():
     print("\n-- Dish: invalid ingredient names/flags rejected on construction --")
     # add_ingredient has always checked both, but direct construction skipped
@@ -2072,6 +2155,9 @@ def _run_all():
     run(test_tuning_cold_start)
     run(test_tuning_shift_after_warmup)
     run(test_tuning_hysteresis)
+    run(test_tuning_note_deploy_change)
+    run(test_tuning_records_the_move_out_of_cold_start)
+    run(test_tuning_last_change_reader)
 
     # Regression tests for the code-review findings.
     run(test_dish_rejects_invalid_ingredient_values)

@@ -17,6 +17,7 @@ randomness anywhere in this module.
 """
 
 import math
+from datetime import date
 
 from .suggestion import RECENCY_CAP_DAYS, score_components
 
@@ -294,3 +295,77 @@ def deployed_weights(state) -> tuple[float, float]:
         return (PRIOR_W, round(1 - PRIOR_W, 4))
     mw = _clamp_to_band(mw)
     return (mw, round(1 - mw, 4))
+
+
+# ---------------------------------------------------------------------------
+# The latest move of the deployed blend
+# ---------------------------------------------------------------------------
+
+def note_deploy_change(previous: dict, state: dict, on: str, dish: str) -> dict:
+    """Record in *state* that the deployed blend moved since *previous*, if it did.
+
+    The current weights cannot answer "why did my suggestions change?": they
+    say where the blend is, not where it was. So when an update moves the
+    deployed weight, the move stays on file: *on*, the ISO date of the cook
+    that caused it, *dish*, the dish that cook registered, the observation
+    count, and the weight before and after. Only the latest move is kept.
+    Pure: returns *state* itself when the weight did not move, and a new dict
+    carrying the record when it did.
+    """
+    before, _ = deployed_weights(previous)
+    after, _ = deployed_weights(state)
+    if abs(after - before) < 1e-9:
+        return state
+    new_state = dict(state)
+    new_state["last_change"] = {
+        "on": on,
+        "dish": dish,
+        "observations": state.get("observations", 0),
+        "from_match_weight": before,
+        "to_match_weight": after,
+    }
+    return new_state
+
+
+def _is_iso_date(value: str) -> bool:
+    try:
+        return date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
+
+
+def last_change(state) -> dict | None:
+    """Safe reader: the latest recorded move of the deployed blend, or ``None``.
+
+    The record only informs, so a malformed one (hand-edited, or written by
+    another version) reads as "no change on record" instead of resetting the
+    learner the way corrupt mass does in :func:`validate_state`. A weight
+    outside ``BAND`` was never deployed, so it counts as malformed too.
+    """
+    record = state.get("last_change") if isinstance(state, dict) else None
+    if not isinstance(record, dict):
+        return None
+    on = record.get("on")
+    dish = record.get("dish")
+    observations = record.get("observations")
+    if not isinstance(on, str) or not _is_iso_date(on):
+        return None
+    if not isinstance(dish, str) or not dish.strip():
+        return None
+    if not isinstance(observations, int) or isinstance(observations, bool) or observations < 0:
+        return None
+    weights = []
+    for key in ("from_match_weight", "to_match_weight"):
+        w = record.get(key)
+        if not isinstance(w, (int, float)) or isinstance(w, bool) or not math.isfinite(w):
+            return None
+        if not BAND[0] <= w <= BAND[1]:
+            return None
+        weights.append(float(w))
+    return {
+        "on": on,
+        "dish": dish,
+        "observations": observations,
+        "from_match_weight": weights[0],
+        "to_match_weight": weights[1],
+    }

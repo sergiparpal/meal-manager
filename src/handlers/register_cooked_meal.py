@@ -122,9 +122,12 @@ def HANDLER(args: dict, **kwargs):
                     name, dishes, fridge_snapshot, days_snapshot, state["candidates"]
                 )
                 if rewards is not None:
-                    state = tuning.apply_update(state, rewards)
-                    state = tuning.select_deployed(state)
-                    tuning_repo.save(state)
+                    learned = tuning.select_deployed(tuning.apply_update(state, rewards))
+                    # Keep the move on file if the blend moved, so
+                    # get_tuning_state can say when and from what.
+                    tuning_repo.save(
+                        tuning.note_deploy_change(state, learned, cooked_iso, dish.name)
+                    )
             except Exception:
                 logger.exception("weight tuning update failed (non-critical)")
 
