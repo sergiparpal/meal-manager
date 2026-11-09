@@ -479,7 +479,7 @@ meal-manager/
 ```
 
 - `deployed_match_weight` / `deployed_time_weight` are the currently deployed availability/recency weights (they sum to 1.0).
-- `last_change` appears once the deployed weight first moves, for example `{"on": "2026-11-09", "observations": 20, "from_match_weight": 0.60, "to_match_weight": 0.40}`. Only the latest move is kept. `get_tuning_state` reports it, so the agent can say why suggestions changed.
+- `last_change` appears once the deployed weight first moves, for example `{"on": "2026-11-09", "dish": "lentil soup", "observations": 20, "from_match_weight": 0.60, "to_match_weight": 0.40}`. Only the latest move is kept. `get_tuning_state` reports it, so the agent can say why suggestions changed.
 - A missing or corrupt file falls back to a fresh initialized state, reproducing the classic 60/40 blend.
 - The state carries a `version`. When the scoring geometry changes, the version is bumped and any file written under the old geometry is discarded on load — accumulated reward mass from a different score model is not comparable. The learner simply restarts from the 60/40 anchor.
 

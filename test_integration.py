@@ -977,8 +977,8 @@ def test_tuning_reports_last_change():
     change = ts.get("last_change") or {}
     check("the cook ended the cold start", ts["observations"] == _tuning_mod.MIN_OBSERVATIONS
           and ts["learning_active"] is True, f"got {ts}")
-    check("the move is dated today, at that observation",
-          change.get("on") == today.isoformat()
+    check("the move is dated today, on that dish, at that observation",
+          change.get("on") == today.isoformat() and change.get("dish") == "last change old"
           and change.get("observations") == _tuning_mod.MIN_OBSERVATIONS, f"got {change}")
     check("it moved from the default blend",
           change.get("from") == {"availability_weight": _tuning_mod.PRIOR_W,

@@ -125,7 +125,9 @@ def HANDLER(args: dict, **kwargs):
                     learned = tuning.select_deployed(tuning.apply_update(state, rewards))
                     # Keep the move on file if the blend moved, so
                     # get_tuning_state can say when and from what.
-                    tuning_repo.save(tuning.note_deploy_change(state, learned, cooked_iso))
+                    tuning_repo.save(
+                        tuning.note_deploy_change(state, learned, cooked_iso, dish.name)
+                    )
             except Exception:
                 logger.exception("weight tuning update failed (non-critical)")
 

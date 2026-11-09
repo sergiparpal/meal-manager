@@ -301,15 +301,16 @@ def deployed_weights(state) -> tuple[float, float]:
 # The latest move of the deployed blend
 # ---------------------------------------------------------------------------
 
-def note_deploy_change(previous: dict, state: dict, on: str) -> dict:
+def note_deploy_change(previous: dict, state: dict, on: str, dish: str) -> dict:
     """Record in *state* that the deployed blend moved since *previous*, if it did.
 
     The current weights cannot answer "why did my suggestions change?": they
     say where the blend is, not where it was. So when an update moves the
     deployed weight, the move stays on file: *on*, the ISO date of the cook
-    that caused it, the observation count, and the weight before and after.
-    Only the latest move is kept. Pure: returns *state* itself when the weight
-    did not move, and a new dict carrying the record when it did.
+    that caused it, *dish*, the dish that cook registered, the observation
+    count, and the weight before and after. Only the latest move is kept.
+    Pure: returns *state* itself when the weight did not move, and a new dict
+    carrying the record when it did.
     """
     before, _ = deployed_weights(previous)
     after, _ = deployed_weights(state)
@@ -318,6 +319,7 @@ def note_deploy_change(previous: dict, state: dict, on: str) -> dict:
     new_state = dict(state)
     new_state["last_change"] = {
         "on": on,
+        "dish": dish,
         "observations": state.get("observations", 0),
         "from_match_weight": before,
         "to_match_weight": after,
@@ -344,8 +346,11 @@ def last_change(state) -> dict | None:
     if not isinstance(record, dict):
         return None
     on = record.get("on")
+    dish = record.get("dish")
     observations = record.get("observations")
     if not isinstance(on, str) or not _is_iso_date(on):
+        return None
+    if not isinstance(dish, str) or not dish.strip():
         return None
     if not isinstance(observations, int) or isinstance(observations, bool) or observations < 0:
         return None
@@ -359,6 +364,7 @@ def last_change(state) -> dict | None:
         weights.append(float(w))
     return {
         "on": on,
+        "dish": dish,
         "observations": observations,
         "from_match_weight": weights[0],
         "to_match_weight": weights[1],

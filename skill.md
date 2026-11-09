@@ -22,7 +22,7 @@ Read-only. Reports the current self-adjusted suggestion weights (availability vs
   - The user asks why suggestions changed, or how the ranking is weighted right now.
   - The user asks whether the system is "learning" or wants to see the current blend (e.g. "availability 0.62 / recency 0.38").
   - Never needed to make a suggestion — it's purely for transparency.
-- **Why suggestions changed:** `last_change` is the latest move of the blend: the day it happened (`on`) and the weights before and after (`from`, `to`). If it is on or after the day of the suggestion the user is comparing with, the blend most likely moved in between: say from what to what, and that it adapts to the meals they register. If it is older, or `null`, the blend did not move in between, so the cooking history and the fridge explain the change.
+- **Why suggestions changed:** `last_change` is the latest move of the blend: the day it happened (`on`), the meal whose registration moved it (`dish`), and the weights before and after (`from`, `to`). If it is on or after the day of the suggestion the user is comparing with, that move is most likely the reason. Say so in this order: the blend adjusts on its own, learning from the meals the user registers; registering that meal moved it; and from what to what. If it is older, or `null`, the blend did not move in between, so the cooking history and the fridge explain the change.
 - **Before learning starts:** not every cooked meal is an observation, only the ones that tell the learner something about the blend. Until `observations` reaches `learning_starts_at`, suggestions use the default blend (`default_availability_weight` / `default_recency_weight`), so don't say it has learned the user's habits yet.
 
 ### `get_quick_shopping_list`
