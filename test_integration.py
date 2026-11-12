@@ -336,6 +336,24 @@ def test_cook_decrements_instead_of_deleting():
           "cnt_a" not in _repos_mod.fridge_repo.load_set())
 
 
+def test_cook_leaves_optionals_alone():
+    print("\n-- register_cooked_meal (optionals are not consumed) --")
+    # The dish above has no optionals, so it could not tell a cook that spends
+    # them from one that does not.
+    add_dish({"dish_name": "Optional Dish",
+              "ingredients": {"opt_base": True, "opt_extra": False}})
+    update_fridge_inventory({"action": "set",
+                             "ingredients": {"opt_base": 2, "opt_extra": 2}})
+
+    register_cooked_meal({"dish_name": "Optional Dish"})
+    fridge = _repos_mod.fridge_repo.load()
+    check("essential is consumed", fridge.get("opt_base") == 1, f"got {fridge}")
+    check("optional in stock is left alone", fridge.get("opt_extra") == 2, f"got {fridge}")
+
+    delete_dish({"dish_name": "Optional Dish"})
+    update_fridge_inventory({"action": "remove", "ingredients": ["opt_base", "opt_extra"]})
+
+
 def test_register_cooked_meal_backdated():
     print("\n-- register_cooked_meal (backdated) --")
     from datetime import date as _date
@@ -459,6 +477,36 @@ def test_get_quick_shopping_list_max_missing():
     check("rejects out-of-range threshold", "error" in bad, f"got {bad}")
     bad2 = parse(get_quick_shopping_list({"max_missing": "two"}))
     check("rejects non-integer threshold", "error" in bad2, f"got {bad2}")
+
+
+def test_get_quick_shopping_list_basket_sizes():
+    print("\n-- get_quick_shopping_list (still_missing per row) --")
+    # One dish a single purchase away and one two purchases away, on ingredients
+    # no other test uses, so their rows can be picked out of the whole catalog.
+    # The test above only checks that the field exists, and the agent tells the
+    # user from it whether one item is enough.
+    add_dish({"dish_name": "Basket Single",
+              "ingredients": {"bsk_have": True, "bsk_one": True}})
+    add_dish({"dish_name": "Basket Pair",
+              "ingredients": {"bsk_pair_a": True, "bsk_pair_b": True}})
+    update_fridge_inventory({"action": "set", "ingredients": {"bsk_have": 1}})
+
+    result = parse(get_quick_shopping_list({"max_missing": 2}))
+    rows = {r["missing_ingredient"]: r for r in result
+            if r["missing_ingredient"].startswith("bsk_")} if isinstance(result, list) else {}
+    check("one purchase away reports a basket of one",
+          rows.get("bsk_one", {}).get("still_missing") == 1
+          and rows["bsk_one"]["unlocks_dishes"] == "basket single",
+          f"got {result}")
+    check("each half of a pair reports a basket of two",
+          all(rows.get(name, {}).get("still_missing") == 2
+              and rows[name]["unlocks_dishes"] == "basket pair"
+              for name in ("bsk_pair_a", "bsk_pair_b")),
+          f"got {result}")
+
+    delete_dish({"dish_name": "Basket Single"})
+    delete_dish({"dish_name": "Basket Pair"})
+    update_fridge_inventory({"action": "remove", "ingredients": ["bsk_have"]})
 
 
 def test_get_missing_for_dish():
@@ -2235,8 +2283,11 @@ def main():
         # state, so they cannot perturb the assertions above.
         run(test_fridge_counts_and_staples)
         run(test_cook_decrements_instead_of_deleting)
+        run(test_cook_leaves_optionals_alone)
         run(test_register_cooked_meal_backdated)
         run(test_register_cooked_meal_backdate_preserves_newer)
+        # Sets up its own dishes and fridge entries and removes them at the end.
+        run(test_get_quick_shopping_list_basket_sizes)
 
         # DII
         run(test_dii_full_lifecycle)
