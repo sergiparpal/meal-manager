@@ -27,7 +27,7 @@ jobs:
         with:
           fetch-depth: 0
       - id: weaver
-        uses: sergiparpal/semantic-diff-weaver@871f08a923b506a470088607962de0009f62d03f # v0.22.1
+        uses: sergiparpal/semantic-diff-weaver@82e2a7745def40d2910652897fbd30a19f67a36a # v0.23.0
         with:
           include: |
             __init__.py
