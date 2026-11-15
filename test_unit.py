@@ -2105,6 +2105,7 @@ def _run_all():
     run(test_atomic_write_json_cleans_up_on_failure)
     run(test_atomic_write_preserves_file_mode)
     run(test_atomic_write_sweeps_stale_temps)
+    run(test_atomic_write_keeps_an_unreadable_target)
     run(test_dii_session_from_dict_validates)
     run(test_dii_finalizer_essential_wins)
     run(test_atomic_write_json_replaces_existing)
@@ -2229,6 +2230,51 @@ def test_atomic_write_preserves_file_mode():
               f"got {oct(_stat.S_IMODE(fresh.stat().st_mode))}")
     finally:
         import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_atomic_write_keeps_an_unreadable_target():
+    print("\n-- atomic_write_json (keeps a damaged file aside instead of writing over it) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_atomic_"))
+    kept = lambda: sorted(p for p in tmp.iterdir() if _src_mod._UNREADABLE_INFIX in p.name)
+    try:
+        target = tmp / "dishes.json"
+        broken = '{"dishes": [{"name": "tortilla", "ingredients": {"huev'
+        target.write_text(broken, encoding="utf-8")
+        check("a truncated file is unreadable", _src_mod.unreadable_json(target))
+        check("a missing file is not", not _src_mod.unreadable_json(tmp / "missing.json"))
+
+        # The repositories read a damaged file as empty, so the next save used to
+        # write that empty view over it and lose what it held (E2E scenario G1).
+        _src_mod.atomic_write_json(target, {"dishes": []})
+        check("the damaged file is kept next to the new one",
+              len(kept()) == 1 and kept()[0].name.startswith("dishes.json.unreadable-"),
+              f"got {[p.name for p in tmp.iterdir()]}")
+        check("with exactly what it held",
+              bool(kept()) and kept()[0].read_text(encoding="utf-8") == broken)
+        check("and the target holds the new data",
+              json.loads(target.read_text(encoding="utf-8")) == {"dishes": []})
+
+        _src_mod.atomic_write_json(target, {"dishes": [1]})
+        check("a readable target is replaced without a copy", len(kept()) == 1,
+              f"got {[p.name for p in kept()]}")
+
+        target.write_bytes(b"\xff\xfe not utf-8")
+        check("bytes that are not UTF-8 are unreadable", _src_mod.unreadable_json(target))
+        _src_mod.atomic_write_json(target, {"dishes": []})
+        check("a second damaged file gets a copy of its own, even in the same second",
+              len(kept()) == 2, f"got {[p.name for p in kept()]}")
+
+        session = tmp / "session.json"
+        session.write_text("{broken", encoding="utf-8")
+        _src_mod.atomic_write_json(session, {"a": 1}, keep_unreadable=False)
+        check("keep_unreadable=False writes over it",
+              not any(p.name.startswith("session.json.unreadable-") for p in tmp.iterdir())
+              and json.loads(session.read_text(encoding="utf-8")) == {"a": 1})
+    finally:
         _shutil.rmtree(tmp, ignore_errors=True)
 
 

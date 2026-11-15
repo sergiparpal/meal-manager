@@ -154,7 +154,8 @@ class IngredientSessionStore:
                 return
             # Session backups are ephemeral crash-recovery state, so skip the
             # directory fsync to keep this lock-held critical section short.
-            atomic_write_json(path, to_dict(session), indent=None, fsync_dir=False)
+            atomic_write_json(path, to_dict(session), indent=None, fsync_dir=False,
+                              keep_unreadable=False)
 
     # -----------------------------------------------------------------
     # Persistence helpers

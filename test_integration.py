@@ -509,6 +509,45 @@ def test_get_quick_shopping_list_basket_sizes():
     update_fridge_inventory({"action": "remove", "ingredients": ["bsk_have"]})
 
 
+def test_damaged_files_are_reported_and_kept():
+    print("\n-- damaged data files: reported on read, kept aside on the next write --")
+    dishes_path = _repos_mod.dish_repo.path
+    fridge_path = _repos_mod.fridge_repo.path
+    saved_dishes = dishes_path.read_text(encoding="utf-8")
+    saved_fridge = fridge_path.read_text(encoding="utf-8")
+    broken_dishes = '{"dishes": [{"name": "damaged dish", "ingredients": {"dmg_a": tr'
+    broken_fridge = '{"dmg_milk": {"count": 2, "expires_on": "20'
+    try:
+        dishes_path.write_text(broken_dishes, encoding="utf-8")
+        listed = parse(list_dishes({}))
+        check("a damaged catalog lists as empty", listed.get("count") == 0, f"got {listed}")
+        check("and says the file is damaged", "damaged" in listed.get("warning", ""), f"got {listed}")
+        add_dish({"dish_name": "After Damage", "ingredients": ["dmg_x"]})
+        kept = sorted(dishes_path.parent.glob("dishes.json.unreadable-*"))
+        check("the first save keeps the damaged catalog aside, as it was",
+              len(kept) == 1 and kept[0].read_text(encoding="utf-8") == broken_dishes,
+              f"got {[p.name for p in kept]}")
+        listed = parse(list_dishes({}))
+        check("and the new catalog reads cleanly, with no warning",
+              "warning" not in listed and listed["count"] == 1, f"got {listed}")
+
+        fridge_path.write_text(broken_fridge, encoding="utf-8")
+        fridge = parse(list_fridge({}))
+        check("a damaged fridge lists as empty and says why",
+              fridge["in_stock"] == {} and "damaged" in fridge.get("warning", ""), f"got {fridge}")
+        update_fridge_inventory({"action": "add", "ingredients": ["dmg_egg"]})
+        kept = sorted(fridge_path.parent.glob("fridge.json.unreadable-*"))
+        check("the first fridge write keeps the damaged file aside, as it was",
+              len(kept) == 1 and kept[0].read_text(encoding="utf-8") == broken_fridge,
+              f"got {[p.name for p in kept]}")
+        check("and the new fridge reads cleanly", "warning" not in parse(list_fridge({})))
+    finally:
+        for p in list(dishes_path.parent.glob("*.unreadable-*")):
+            p.unlink()
+        dishes_path.write_text(saved_dishes, encoding="utf-8")
+        fridge_path.write_text(saved_fridge, encoding="utf-8")
+
+
 def test_get_missing_for_dish():
     print("\n-- get_missing_for_dish --")
     result = parse(get_missing_for_dish({"dish_name": "Arroz con Pollo"}))
@@ -2331,6 +2370,7 @@ def main():
         # Ingredient expiry. Self-contained: uses its own exp_* keys.
         run(test_fridge_expiry_end_to_end)
         run(test_fridge_expiry_validation)
+        run(test_damaged_files_are_reported_and_kept)
 
         # Ingredient aliases. These register a persistent alias map that the
         # tool boundary consults on every later call, so they run late and
