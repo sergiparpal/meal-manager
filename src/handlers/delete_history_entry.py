@@ -31,6 +31,14 @@ def HANDLER(args: dict, **kwargs):
     name = normalize_dish_name(raw_name)
     event = history_repo.retract_latest_for_dish(name)
     if event is None:
+        if history_repo.damaged():
+            # Otherwise the user hears that the cook was never recorded, when
+            # it may well be in the file that could not be read.
+            raise LookupError(
+                "The cooking history file (history.json) is damaged and could "
+                f"not be read, so there is no cook of '{name}' to take back. "
+                "Tell the user."
+            )
         raise LookupError(f"'{raw_name}' not found in cooking history.")
     return (
         f"Retracted the cook of '{name}' recorded for {event.cooked_on}. "

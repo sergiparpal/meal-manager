@@ -930,6 +930,74 @@ def test_history_corruption():
         _shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_history_damaged_log_is_kept_aside():
+    print("\n-- JsonHistoryRepository: a damaged log is reported and kept aside --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_history_"))
+    copies = lambda: sorted(tmp.glob("history.json.unreadable-*"))
+    try:
+        path = tmp / "history.json"
+        repo = _history_repo_in_tmp(tmp)
+        check("a missing file is not damaged", repo.damaged() is False)
+        repo.append_event("paella", "2026-07-26")
+        check("a valid log is not damaged", repo.damaged() is False)
+        path.write_text(json.dumps({"Paella": "2026-07-26"}), encoding="utf-8")
+        check("a legacy {dish: date} file is not damaged", repo.damaged() is False)
+
+        # Valid JSON, so atomic_write_json's own check let the next cook write
+        # over it: CookingEvent rejects the hand-typed date, and with it the log.
+        hand_typed = json.dumps({"schema_version": 2, "events": [{
+            "id": "cook_abc", "dish_name": "paella", "cooked_on": "26/07/2026",
+            "recorded_at": "2026-07-26T10:00:00+00:00", "backfilled": False,
+            "retracted_at": None}]})
+        for label, content in (
+            ("invalid JSON", "{not json"),
+            ("top-level list", "[1, 2, 3]"),
+            ("unsupported schema_version", '{"schema_version": 99, "events": []}'),
+            ("a date typed by hand", hand_typed),
+        ):
+            for copy in copies():
+                copy.unlink()
+            path.write_text(content, encoding="utf-8")
+            check(f"{label}: damaged", repo.damaged() is True)
+            # A log that reads as empty has nothing to take back, so the undo
+            # paths must return without saving over it.
+            repo.retract_event("cook_abc")
+            repo.retract_latest_for_dish("paella")
+            repo.retract_all_for_dish("paella")
+            repo.delete_event("cook_abc")
+            check(f"{label}: the undo paths leave it alone",
+                  path.read_text(encoding="utf-8") == content and copies() == [])
+            repo.append_event("stew", "2026-08-01")
+            check(f"{label}: the next cook keeps it aside, as it was",
+                  len(copies()) == 1 and copies()[0].read_text(encoding="utf-8") == content,
+                  f"got {[p.name for p in tmp.iterdir()]}")
+            check(f"{label}: and starts a new log with just that cook",
+                  [e.dish_name for e in repo.load_events(strict=True)] == ["stew"]
+                  and repo.damaged() is False)
+
+        # Like unreadable_json: a file that cannot be opened is not "damaged",
+        # since there is no telling what it holds.
+        path.write_text("{not json", encoding="utf-8")
+        path.chmod(0o000)
+        try:
+            try:
+                path.read_text(encoding="utf-8")
+                enforced = False
+            except OSError:
+                enforced = True
+            if enforced:
+                check("a file that cannot be opened is not counted", repo.damaged() is False)
+            else:
+                check("unopenable-file check skipped (running as root)", True)
+        finally:
+            path.chmod(0o644)
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_cooking_event_from_dict_strict():
     print("\n-- CookingEvent.from_dict (strict) --")
     complete = {
@@ -2106,6 +2174,7 @@ def _run_all():
     run(test_atomic_write_preserves_file_mode)
     run(test_atomic_write_sweeps_stale_temps)
     run(test_atomic_write_keeps_an_unreadable_target)
+    run(test_atomic_write_keeps_a_damaged_target)
     run(test_dii_session_from_dict_validates)
     run(test_dii_finalizer_essential_wins)
     run(test_atomic_write_json_replaces_existing)
@@ -2125,6 +2194,7 @@ def _run_all():
     run(test_history_retract_versus_delete)
     run(test_history_legacy_migration)
     run(test_history_corruption)
+    run(test_history_damaged_log_is_kept_aside)
 
     run(test_normalize_ingredients_dict)
     run(test_normalize_ingredients_list)
@@ -2274,6 +2344,36 @@ def test_atomic_write_keeps_an_unreadable_target():
         check("keep_unreadable=False writes over it",
               not any(p.name.startswith("session.json.unreadable-") for p in tmp.iterdir())
               and json.loads(session.read_text(encoding="utf-8")) == {"a": 1})
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_atomic_write_keeps_a_damaged_target():
+    print("\n-- atomic_write_json (target_damaged keeps valid JSON aside too) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_atomic_"))
+    kept = lambda: sorted(p for p in tmp.iterdir() if _src_mod._UNREADABLE_INFIX in p.name)
+    try:
+        target = tmp / "history.json"
+        wrong_shape = '{"schema_version": 2, "events": [{"id": "x"}]}'
+        target.write_text(wrong_shape, encoding="utf-8")
+        _src_mod.atomic_write_json(target, {"events": []})
+        check("valid JSON is written over by default", kept() == [])
+
+        target.write_text(wrong_shape, encoding="utf-8")
+        _src_mod.atomic_write_json(target, {"events": []}, target_damaged=True)
+        check("target_damaged keeps it aside, as it was",
+              len(kept()) == 1 and kept()[0].read_text(encoding="utf-8") == wrong_shape,
+              f"got {[p.name for p in tmp.iterdir()]}")
+        check("and writes the new data",
+              json.loads(target.read_text(encoding="utf-8")) == {"events": []})
+
+        fresh = tmp / "fresh.json"
+        _src_mod.atomic_write_json(fresh, {"a": 1}, target_damaged=True)
+        check("a missing target has nothing to keep",
+              len(kept()) == 1 and json.loads(fresh.read_text(encoding="utf-8")) == {"a": 1})
     finally:
         _shutil.rmtree(tmp, ignore_errors=True)
 

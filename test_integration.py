@@ -548,6 +548,86 @@ def test_damaged_files_are_reported_and_kept():
         fridge_path.write_text(saved_fridge, encoding="utf-8")
 
 
+def test_damaged_history_is_reported_and_kept():
+    print("\n-- damaged history.json: reported, kept aside, the learner left alone --")
+    history_path = _repos_mod.history_repo.path
+    data_dir = history_path.parent
+    saved = {
+        p: (p.read_text(encoding="utf-8") if p.exists() else None)
+        for p in (data_dir / name
+                  for name in ("dishes.json", "fridge.json", "history.json", "tuning.json"))
+    }
+    # Valid JSON with one date typed by hand. CookingEvent rejects the event,
+    # and with it the whole log; atomic_write_json, which only checks that a
+    # file is JSON, used to let the next cook write over it.
+    damaged = json.dumps({"schema_version": 2, "events": [{
+        "id": "cook_dmghist1", "dish_name": "dmg hist stew", "cooked_on": "16/11/2026",
+        "recorded_at": "2026-11-16T20:00:00+00:00", "backfilled": False,
+        "retracted_at": None}]})
+    learner_calls: list = []
+    real_compute_rewards = _tuning_mod.compute_rewards
+
+    def counting_compute_rewards(*args, **kwargs):
+        learner_calls.append(args[0])
+        return real_compute_rewards(*args, **kwargs)
+
+    _tuning_mod.compute_rewards = counting_compute_rewards
+    try:
+        add_dish({"dish_name": "dmg hist stew", "ingredients": ["dmgh_beans"]})
+
+        history_path.write_text('{"schema_version": 2, "events": [{"id": "cook_', encoding="utf-8")
+        result = parse(get_meal_suggestions({}))
+        check("a truncated history: suggestions come with a warning",
+              isinstance(result, dict) and isinstance(result.get("suggestions"), list)
+              and "damaged" in result.get("warning", ""), f"got {result}")
+
+        history_path.write_text(damaged, encoding="utf-8")
+        result = parse(get_meal_suggestions({}))
+        check("a history of the wrong shape: the same warning",
+              isinstance(result, dict) and "damaged" in result.get("warning", ""),
+              f"got {result}")
+
+        listed = parse(list_cooking_history({}))
+        check("the history lists as empty, with the same warning",
+              isinstance(listed, dict) and listed.get("events") == []
+              and "damaged" in listed.get("warning", ""), f"got {listed}")
+
+        undo = parse(delete_history_entry({"dish_name": "dmg hist stew"}))
+        check("undo says the history is damaged, not that the cook was never recorded",
+              isinstance(undo, dict) and "damaged" in undo.get("error", ""), f"got {undo}")
+        check("and leaves the file as it was",
+              history_path.read_text(encoding="utf-8") == damaged)
+
+        reply = parse(register_cooked_meal({"dish_name": "dmg hist stew"}))
+        check("registering a meal says a new history started",
+              isinstance(reply, str) and "damaged" in reply and "new history" in reply,
+              f"got {reply}")
+        kept = sorted(data_dir.glob("history.json.unreadable-*"))
+        check("the damaged log is kept aside, as it was",
+              len(kept) == 1 and kept[0].read_text(encoding="utf-8") == damaged,
+              f"got {[p.name for p in kept]}")
+        check("and the new log holds just this cook",
+              [e.dish_name for e in _repos_mod.history_repo.load_events(strict=True)]
+              == ["dmg hist stew"])
+        check("the learner is not replayed against a history missing every earlier cook",
+              learner_calls == [], f"compute_rewards ran for {learner_calls}")
+
+        check("suggestions are a plain list again",
+              isinstance(parse(get_meal_suggestions({})), list))
+        register_cooked_meal({"dish_name": "dmg hist stew"})
+        check("and the next cook consults the learner as usual",
+              learner_calls == ["dmg hist stew"], f"compute_rewards ran for {learner_calls}")
+    finally:
+        _tuning_mod.compute_rewards = real_compute_rewards
+        for p in list(data_dir.glob("*.unreadable-*")):
+            p.unlink()
+        for p, text in saved.items():
+            if text is None:
+                p.unlink(missing_ok=True)
+            else:
+                p.write_text(text, encoding="utf-8")
+
+
 def test_get_missing_for_dish():
     print("\n-- get_missing_for_dish --")
     result = parse(get_missing_for_dish({"dish_name": "Arroz con Pollo"}))
@@ -1253,10 +1333,12 @@ def test_list_cooking_history_surfaces_corruption():
     try:
         (_TMP_DATA_DIR / "history.json").write_text("{not json", encoding="utf-8")
         res = parse(list_cooking_history({}))
-        # An empty list here would read as "you have never cooked anything",
-        # which is a different and much worse answer than "I cannot read this".
-        check("corrupt history surfaces as an error, not an empty log",
-              "error" in res, f"got {res}")
+        # A bare empty list here would read as "you have never cooked
+        # anything", which is a different and much worse answer than "I cannot
+        # read this". The warning is what tells the two apart.
+        check("corrupt history comes back empty, with a warning saying why",
+              isinstance(res, dict) and res.get("events") == []
+              and "damaged" in res.get("warning", ""), f"got {res}")
     finally:
         (_TMP_DATA_DIR / "history.json").write_text(original, encoding="utf-8")
 
@@ -2371,6 +2453,7 @@ def main():
         run(test_fridge_expiry_end_to_end)
         run(test_fridge_expiry_validation)
         run(test_damaged_files_are_reported_and_kept)
+        run(test_damaged_history_is_reported_and_kept)
 
         # Ingredient aliases. These register a persistent alias map that the
         # tool boundary consults on every later call, so they run late and

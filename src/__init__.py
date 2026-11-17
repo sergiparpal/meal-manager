@@ -91,9 +91,20 @@ def _keep_unreadable(path: Path) -> Path | None:
 
     Reading a damaged file as empty is what keeps the plugin usable, but it
     meant the next save wrote the empty view over the file and whatever it held
-    was gone for good. Nothing reads the copy back; it is there to recover by hand.
+    was gone for good.
     """
     if not unreadable_json(path):
+        return None
+    return _keep_aside(path)
+
+
+def _keep_aside(path: Path) -> Path | None:
+    """Move *path* aside as ``<name>.unreadable-<UTC time>``, and return where.
+
+    Nothing reads the copy back; it is there to recover by hand. A missing
+    *path* has nothing to keep.
+    """
+    if not path.exists():
         return None
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     kept = path.with_name(f"{path.name}{_UNREADABLE_INFIX}{stamp}")
@@ -108,7 +119,8 @@ def _keep_unreadable(path: Path) -> Path | None:
 
 
 def atomic_write_json(path: Path, data, *, indent: int | None = 2,
-                      fsync_dir: bool = True, keep_unreadable: bool = True) -> None:
+                      fsync_dir: bool = True, keep_unreadable: bool = True,
+                      target_damaged: bool = False) -> None:
     """Write JSON atomically via temp file + os.replace.
 
     ``fsync_dir`` also fsyncs the parent directory so the rename is crash-durable
@@ -120,6 +132,10 @@ def atomic_write_json(path: Path, data, *, indent: int | None = 2,
     ``<name>.unreadable-<UTC time>``, instead of writing over it. If that move
     fails, the write fails too and the target is left as it was. The same
     reconstructable files may pass ``False``.
+
+    ``target_damaged`` is for a caller that has already found the target
+    unusable although it parses as JSON, such as an event log of the wrong
+    shape: the target is kept aside the same way, without the JSON check.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=_TMP_PREFIX,
@@ -130,7 +146,9 @@ def atomic_write_json(path: Path, data, *, indent: int | None = 2,
             json.dump(data, f, ensure_ascii=False, indent=indent)
             f.flush()
             os.fsync(f.fileno())
-        if keep_unreadable:
+        if target_damaged:
+            _keep_aside(path)
+        elif keep_unreadable:
             _keep_unreadable(path)
         os.replace(tmp, str(path))
         # Also fsync the parent directory so the rename itself is durable:
