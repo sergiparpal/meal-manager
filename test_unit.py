@@ -531,6 +531,51 @@ def test_fridge_repository_counts():
         _shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_fridge_consumable_and_restore():
+    print("\n-- JsonFridgeRepository (consumable, and restore as the undo of consume) --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_fridge_"))
+    try:
+        path = tmp / "fridge.json"
+        repo = _repos_mod.JsonFridgeRepository(path)
+        repo.save_entries({
+            "eggs": {"count": 2, "expires_on": None},
+            "salt": {"count": None, "expires_on": None},
+            "onion": {"count": 0, "expires_on": None},
+            "milk": {"count": 1, "expires_on": "2026-12-01"},
+        })
+        before = path.read_text(encoding="utf-8")
+        names = ["eggs", "salt", "onion", "milk", "absent"]
+        check("consumable names what consume would change, in order",
+              repo.consumable(names) == ["eggs", "milk"], f"got {repo.consumable(names)}")
+        check("and writes nothing", path.read_text(encoding="utf-8") == before)
+        check("it matches what consume then reports",
+              sorted(repo.consume(names)) == ["eggs", "milk"])
+
+        restored = repo.restore(["eggs", "milk"], max_count=99)
+        check("restore reports the counts before", restored == {"eggs": 1, "milk": 0},
+              f"got {restored}")
+        check("and puts one portion back of each",
+              repo.load() == {"eggs": 2, "salt": None, "onion": 0, "milk": 1},
+              f"got {repo.load()}")
+        check("keeping the expiry on file",
+              repo.load_entries()["milk"]["expires_on"] == "2026-12-01")
+
+        restored = repo.restore(["gone", "salt"], max_count=99)
+        check("a name no longer in the fridge comes back with one portion; a staple is left alone",
+              restored == {"gone": None} and repo.load()["gone"] == 1
+              and repo.load()["salt"] is None, f"got {restored}, {repo.load()}")
+
+        repo.save({"full": 99})
+        check("a count at the maximum stays there",
+              repo.restore(["full"], max_count=99) == {} and repo.load()["full"] == 99)
+        check("restoring nothing is a no-op", repo.restore([], max_count=99) == {})
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_fridge_repository_non_finite_counts():
     print("\n-- JsonFridgeRepository (non-finite counts) --")
     # Python's json module accepts NaN/Infinity literals, and both explode in
@@ -858,6 +903,35 @@ def test_history_retract_versus_delete():
         _shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_history_records_consumed_and_reinstates():
+    print("\n-- JsonHistoryRepository: what a cook used, and reinstate_event --")
+    import shutil as _shutil
+    import tempfile
+    from pathlib import Path as _Path
+    tmp = _Path(tempfile.mkdtemp(prefix="mm_history_"))
+    try:
+        repo = _history_repo_in_tmp(tmp)
+        plain = repo.append_event("stew", "2026-07-20")
+        cooked = repo.append_event("paella", "2026-07-26", consumed=["arroz", "pollo"])
+        stored = json.loads((tmp / "history.json").read_text(encoding="utf-8"))["events"]
+        check("a cook without it stores no consumed key", "consumed" not in stored[0],
+              f"got {stored[0]}")
+        check("a cook with it stores it", stored[1].get("consumed") == ["arroz", "pollo"],
+              f"got {stored[1]}")
+
+        taken = repo.retract_latest_for_dish("paella")
+        check("the retracted event says what it used",
+              taken is not None and taken.consumed == ["arroz", "pollo"])
+        check("reinstate_event undoes the retraction",
+              repo.reinstate_event(cooked.id) is True and repo.load().get("paella") == "2026-07-26")
+        check("an active event has nothing to reinstate", repo.reinstate_event(cooked.id) is False)
+        check("nor has an unknown one", repo.reinstate_event("cook_nope") is False)
+        check("and the other event is untouched",
+              [e.id for e in repo.load_events() if e.active] == [plain.id, cooked.id])
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_history_legacy_migration():
     print("\n-- JsonHistoryRepository: legacy {dish: date} migration --")
     import tempfile
@@ -996,6 +1070,41 @@ def test_history_damaged_log_is_kept_aside():
             path.chmod(0o644)
     finally:
         _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_cooking_event_consumed():
+    print("\n-- CookingEvent.consumed (what a cook took from the fridge) --")
+    base = {
+        "id": "cook_abc",
+        "dish_name": "paella",
+        "cooked_on": "2026-07-26",
+        "recorded_at": "2026-07-26T10:00:00+00:00",
+        "backfilled": False,
+        "retracted_at": None,
+    }
+    old = _history_event_mod.CookingEvent.from_dict(base)
+    check("an event from before the field reads as not recorded", old.consumed is None)
+    check("and is written back exactly as it was read", old.to_dict() == base,
+          f"got {old.to_dict()}")
+
+    new = _history_event_mod.CookingEvent.from_dict({**base, "consumed": [" Arroz", "pollo"]})
+    check("names are normalized", new.consumed == ["arroz", "pollo"], f"got {new.consumed}")
+    check("and round-trip", new.to_dict()["consumed"] == ["arroz", "pollo"])
+    empty = _history_event_mod.CookingEvent.from_dict({**base, "consumed": []})
+    check("an empty list is kept: recorded, nothing taken",
+          empty.consumed == [] and empty.to_dict()["consumed"] == [])
+
+    for bad in ("arroz", [1], [""], {"arroz": True}):
+        try:
+            _history_event_mod.CookingEvent.from_dict({**base, "consumed": bad})
+            check(f"consumed={bad!r} raises", False, "no exception")
+        except ValueError:
+            check(f"consumed={bad!r} raises ValueError", True)
+    try:
+        _history_event_mod.CookingEvent.from_dict({**base, "consumd": []})
+        check("a misspelt key still raises", False, "no exception")
+    except ValueError as exc:
+        check("a misspelt key still raises", "consumd" in str(exc), str(exc))
 
 
 def test_cooking_event_from_dict_strict():
@@ -2157,6 +2266,7 @@ def _run_all():
     run(test_suggest_quick_shopping_score_matches_cheapest_unlock)
 
     run(test_fridge_repository_counts)
+    run(test_fridge_consumable_and_restore)
     run(test_fridge_unreadable_file_degrades_quietly)
     run(test_fridge_repository_non_finite_counts)
 
@@ -2189,9 +2299,11 @@ def _run_all():
     run(test_dii_orphan_sweep_takes_the_oldest_backups_first)
 
     run(test_cooking_event_from_dict_strict)
+    run(test_cooking_event_consumed)
     run(test_history_projects_latest_per_dish)
     run(test_history_older_event_cannot_rewind_the_cooldown)
     run(test_history_retract_versus_delete)
+    run(test_history_records_consumed_and_reinstates)
     run(test_history_legacy_migration)
     run(test_history_corruption)
     run(test_history_damaged_log_is_kept_aside)

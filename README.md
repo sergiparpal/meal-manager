@@ -34,7 +34,7 @@ The result is a system that offers the user the freedom of conversation while gu
 - **What a Dish Still Needs** — `get_missing_for_dish` answers "can I make this tonight?" for a named dish, splitting what is missing into blocking essentials and score-only optionals.
 - **Fridge Inventory Management** — Add, remove, or set ingredients as you shop or cook, tracked as approximate portion counts rather than an all-or-nothing list. Pantry staples (salt, oil, spices) are marked unlimited and never run out. Ingredient and dish names are normalized to lowercase for consistent matching.
 - **Cooking History Tracking** — Logs cooked meals with ISO dates, including backdated ones, as an append-only event log. The one-date-per-dish view the suggestion engine uses is computed from that log, so backdating cannot rewind the cooldown on something you made this morning — recording a forgotten meal from last month simply adds an older event that the projection ignores. `list_cooking_history` answers "when did I last cook this?" and "how often do I make it?", and taking an entry back retracts it rather than destroying it, so the record of what you actually cooked stays intact. History keys are normalized to lowercase on load, so comparisons are case-insensitive.
-- **Portion Accounting on Cook** — When a meal is registered as cooked, one portion of each essential ingredient is consumed from the fridge. An ingredient you had plenty of stays available; one that runs out is remembered as out of stock rather than silently deleted.
+- **Portion Accounting on Cook** — When a meal is registered as cooked, one portion of each essential ingredient is consumed from the fridge. An ingredient you had plenty of stays available; one that runs out is remembered as out of stock rather than silently deleted. If the meal didn't happen after all, taking it back can put those portions back.
 - **Essential vs. Optional Ingredients** — Recipes distinguish between must-have ingredients (required to cook) and nice-to-have ingredients (boost the suggestion score but are not blocking).
 - **Cooking Instructions** — Recipes can carry free-form cooking steps alongside their ingredients. `set_dish_instructions` records or clears them, `get_dish_recipe` reads the whole recipe back, and editing a dish's ingredients leaves the steps untouched.
 - **Ingredient Aliases** — "tomato", "tomatoes" and "roma tomato" stop being three different things. `merge_ingredient_alias` rewrites the catalog and fridge once to use a single canonical name, then remembers the alias so anything you type later canonicalizes itself. Where a recipe listed both spellings, essential wins over optional; where the fridge held both, the counts add up under the same per-ingredient ceiling any other update respects, and the earlier of the two expiry dates carries over — a date you recorded is never lost to a merge.
@@ -223,7 +223,7 @@ The plugin is loaded by a Hermes agent via the `register(ctx)` entry point in `_
 | `get_tuning_state` | Reports the current self-adjusted availability/recency blend, when it last changed, and learning status |
 | `update_fridge_inventory` | Adds, removes, or sets fridge ingredients and their portion counts |
 | `register_cooked_meal` | Logs a dish as cooked (today or a given date) and consumes one portion of each essential |
-| `delete_history_entry` | Undo for `register_cooked_meal` — retracts the most recent cook of a dish |
+| `delete_history_entry` | Undo for `register_cooked_meal` — retracts the most recent cook of a dish, and with `restore_fridge` puts back what that cook took from the fridge |
 | `list_cooking_history` | Lists recorded cook events, newest first — "when did I last cook X?" |
 | `list_fridge` | Returns the current fridge contents with portion counts, expiry dates, and what needs using up |
 | `list_dishes` | Lists every recipe in the catalog with its essential and optional ingredients |
@@ -444,7 +444,8 @@ meal-manager/
       "cooked_on": "2026-04-02",
       "recorded_at": "2026-04-02T19:14:03+00:00",
       "backfilled": false,
-      "retracted_at": null
+      "retracted_at": null,
+      "consumed": ["rice", "chicken"]
     }
   ]
 }
@@ -453,6 +454,7 @@ meal-manager/
 - The one-date-per-dish view the suggestion engine consumes is a *projection*: the latest `cooked_on` per dish, with retracted events excluded. Because it takes a maximum, an older event can never displace a newer one.
 - `backfilled` marks a cook recorded after the fact. Backdated cooks still consume from the fridge but skip the learning update, since the decision they replay never happened.
 - `retracted_at` marks an entry the user took back. The row survives and stays visible through `list_cooking_history`; it just stops counting. Only a rolled-back cook — one whose fridge consumption failed — is hard-deleted, because it never happened at all.
+- `consumed` lists the fridge items the cook took a portion of. Taking the cook back with `restore_fridge` puts exactly those back. Cooks recorded before this field existed have none, and nothing is put back for them. An older version of the plugin cannot read a history that has it.
 
 > **Format change.** `history.json` was previously a flat `{"dish name": "2026-04-02"}` object. Existing files are migrated in memory on load (one event per entry, with ids derived deterministically so re-migrating never duplicates a row) and rewritten in the new shape on the next write.
 

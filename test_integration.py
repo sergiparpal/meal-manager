@@ -1327,6 +1327,74 @@ def test_list_cooking_history_validation():
     check("unknown argument rejected", "error" in res4, f"got {res4}")
 
 
+def test_undo_puts_back_what_the_cook_used():
+    print("\n-- delete_history_entry(restore_fridge): the undo puts back what the cook used --")
+    from datetime import date as _date
+    data_dir = _repos_mod.history_repo.path.parent
+    saved = {
+        p: (p.read_text(encoding="utf-8") if p.exists() else None)
+        for p in (data_dir / name
+                  for name in ("dishes.json", "fridge.json", "history.json", "tuning.json"))
+    }
+    fridge = _repos_mod.fridge_repo.load
+    today = _date.today().isoformat()
+    try:
+        add_dish({"dish_name": "Undo Stew",
+                  "ingredients": {"undo_beans": True, "undo_salt": True, "undo_onion": False}})
+        update_fridge_inventory({"action": "set", "ingredients": {
+            "undo_beans": 2, "undo_salt": None, "undo_onion": 1}})
+
+        register_cooked_meal({"dish_name": "Undo Stew"})
+        cooks = [e for e in _repos_mod.history_repo.load_events() if e.dish_name == "undo stew"]
+        check("the cook records what it took: not the staple, not the optional",
+              cooks[-1].consumed == ["undo_beans"], f"got {cooks[-1].consumed}")
+
+        reply = parse(delete_history_entry({"dish_name": "Undo Stew"}))
+        check("without restore_fridge, the fridge stays as the cook left it",
+              fridge()["undo_beans"] == 1 and "Put back" not in reply, f"got {reply!r}, {fridge()}")
+
+        register_cooked_meal({"dish_name": "Undo Stew"})
+        check("a second cook takes the last portion", fridge()["undo_beans"] == 0)
+        reply = parse(delete_history_entry({"dish_name": "Undo Stew", "restore_fridge": True}))
+        check("with restore_fridge, it puts that portion back and says so",
+              fridge()["undo_beans"] == 1 and "undo_beans (0 -> 1)" in reply, f"got {reply!r}")
+        check("the staple and the optional are untouched",
+              fridge()["undo_salt"] is None and fridge()["undo_onion"] == 1, f"got {fridge()}")
+        check("and neither cook counts any more", "undo stew" not in _repos_mod.history_repo.load())
+
+        res = parse(delete_history_entry({"dish_name": "Undo Stew", "restore_fridge": "yes"}))
+        check("restore_fridge must be a boolean",
+              isinstance(res, dict) and "true or false" in res.get("error", ""), f"got {res}")
+
+        # A cook recorded before the plugin noted what each cook used.
+        _repos_mod.history_repo.append_event("undo stew", today)
+        reply = parse(delete_history_entry({"dish_name": "Undo Stew", "restore_fridge": True}))
+        check("an older cook says nothing was put back, and why",
+              "recorded before" in reply and fridge()["undo_beans"] == 1, f"got {reply!r}")
+
+        register_cooked_meal({"dish_name": "Undo Stew"})
+
+        def failing_restore(*args, **kwargs):
+            raise OSError("disk full")
+
+        _repos_mod.fridge_repo.restore = failing_restore
+        try:
+            res = parse(delete_history_entry({"dish_name": "Undo Stew", "restore_fridge": True}))
+        finally:
+            del _repos_mod.fridge_repo.restore
+        check("if the fridge half fails, the call fails", isinstance(res, dict) and "error" in res,
+              f"got {res}")
+        check("and the cook still counts, as before",
+              _repos_mod.history_repo.load().get("undo stew") == today)
+        check("with the fridge as the cook left it", fridge()["undo_beans"] == 0)
+    finally:
+        for p, text in saved.items():
+            if text is None:
+                p.unlink(missing_ok=True)
+            else:
+                p.write_text(text, encoding="utf-8")
+
+
 def test_list_cooking_history_surfaces_corruption():
     print("\n-- list_cooking_history (corrupt storage) --")
     original = (_TMP_DATA_DIR / "history.json").read_text(encoding="utf-8")
@@ -2454,6 +2522,7 @@ def main():
         run(test_fridge_expiry_validation)
         run(test_damaged_files_are_reported_and_kept)
         run(test_damaged_history_is_reported_and_kept)
+        run(test_undo_puts_back_what_the_cook_used)
 
         # Ingredient aliases. These register a persistent alias map that the
         # tool boundary consults on every later call, so they run late and

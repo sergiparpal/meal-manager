@@ -259,3 +259,44 @@ class JsonFridgeRepository:
             if previous:
                 self.save_entries(entries)
             return previous
+
+    def consumable(self, names: list[str]) -> list[str]:
+        """The names :meth:`consume` would change, without changing anything.
+
+        The cook handler records them with the cook, under the same lock as the
+        consume that follows, so that taking the cook back later can put back
+        exactly what it took.
+        """
+        entries = self.load_entries()
+        return [
+            name for name in names
+            if name in entries and consume_one(entries[name]["count"]) != entries[name]["count"]
+        ]
+
+    def restore(self, names: list[str], *, max_count: int) -> dict:
+        """Put back one portion of each name: the undo of :meth:`consume`.
+
+        Returns ``{name: previous_count}`` for the entries changed, where
+        ``None`` marks a name that was no longer in the fridge and comes back
+        with one portion. Staples are left alone, and a count already at
+        *max_count* stays there. Expiry dates on file are kept.
+        """
+        if not names:
+            return {}
+        with self.lock:
+            entries = self.load_entries()
+            previous: dict = {}
+            for name in names:
+                entry = entries.get(name)
+                if entry is None:
+                    entries[name] = {"count": 1, "expires_on": None}
+                    previous[name] = None
+                    continue
+                count = entry["count"]
+                if count is STAPLE or count >= max_count:
+                    continue
+                previous[name] = count
+                entry["count"] = count + 1
+            if previous:
+                self.save_entries(entries)
+            return previous

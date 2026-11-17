@@ -111,8 +111,13 @@ class JsonHistoryRepository:
         cooked_on,
         *,
         backfilled: bool = False,
+        consumed: list[str] | None = None,
     ) -> CookingEvent:
-        """Record a cook and return the stored event."""
+        """Record a cook and return the stored event.
+
+        *consumed* names the fridge items the cook takes a portion of, so that
+        taking it back can put them back (see ``CookingEvent.consumed``).
+        """
         value = cooked_on if isinstance(cooked_on, str) else cooked_on.isoformat()
         with self._lock:
             # A damaged log loads as empty, so saving the new event wrote over
@@ -127,6 +132,7 @@ class JsonHistoryRepository:
                 cooked_on=value,
                 recorded_at=utc_now_iso(),
                 backfilled=bool(backfilled),
+                consumed=consumed,
             )
             events.append(event)
             self._save(events, damaged=damaged)
@@ -142,6 +148,22 @@ class JsonHistoryRepository:
                     self._save(events)
                     return event
             return None
+
+    def reinstate_event(self, event_id: str) -> bool:
+        """Undo a retraction. Returns True if the event was retracted.
+
+        The rollback path for a take-back whose fridge restore failed, and only
+        that: a take-back that never completed must leave the cook counting, as
+        before.
+        """
+        with self._lock:
+            events = self.load_events()
+            for event in events:
+                if event.id == event_id and not event.active:
+                    event.retracted_at = None
+                    self._save(events)
+                    return True
+            return False
 
     def retract_latest_for_dish(self, dish_name: str) -> CookingEvent | None:
         """Retract the most recent active cook of *dish_name*.
