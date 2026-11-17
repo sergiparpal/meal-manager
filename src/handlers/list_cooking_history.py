@@ -1,12 +1,19 @@
 """Tool: list_cooking_history — read the cooking history event log."""
 
-from ..repositories import history_repo
+from ..repositories import HistoryDataError, history_repo
 from ._common import normalize_dish_name, tool_handler
 
 NAME = "list_cooking_history"
 
 MAX_LIMIT = 1000
 DEFAULT_LIMIT = 100
+
+DAMAGED_WARNING = (
+    "The cooking history file (history.json) is damaged and could not be "
+    "read, so this list is empty even if the user has cooked before. Tell "
+    "the user. Registering a meal starts a new history and keeps the damaged "
+    "file aside, as history.json.unreadable-<time>."
+)
 
 SCHEMA = {
     "description": (
@@ -15,7 +22,9 @@ SCHEMA = {
         "the dish name, the date it was cooked, when it was recorded, whether "
         "it was backfilled (recorded after the fact), and its status — "
         "'retracted' rows were taken back by the user and no longer count "
-        "toward the recency cooldown, but are still on record."
+        "toward the recency cooldown, but are still on record. If the history "
+        "file is damaged, the list is empty and a 'warning' says so: tell the "
+        "user, and don't say they have never cooked anything."
     ),
     "type": "object",
     "properties": {
@@ -66,9 +75,17 @@ def HANDLER(args: dict, **kwargs):
     raw_name = args.get("dish_name")
     dish_filter = normalize_dish_name(raw_name) if raw_name is not None else None
 
-    # strict=True on purpose: an unreadable file must surface as an error, not
-    # as an empty list that reads as "you have never cooked anything".
-    events = history_repo.load_events(strict=True)
+    # strict=True on purpose: an unreadable file must not come back as a bare
+    # empty list, which reads as "you have never cooked anything". A damaged
+    # file says why in a warning, as list_dishes and list_fridge do; it used to
+    # be an error, which logged a traceback for what is a data problem. A file
+    # that cannot be opened at all is still an error.
+    try:
+        events = history_repo.load_events(strict=True)
+    except HistoryDataError:
+        if not history_repo.damaged():
+            raise
+        return {"events": [], "count": 0, "truncated": False, "warning": DAMAGED_WARNING}
 
     rows = []
     for event in reversed(events):

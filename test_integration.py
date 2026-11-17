@@ -587,6 +587,11 @@ def test_damaged_history_is_reported_and_kept():
               isinstance(result, dict) and "damaged" in result.get("warning", ""),
               f"got {result}")
 
+        listed = parse(list_cooking_history({}))
+        check("the history lists as empty, with the same warning",
+              isinstance(listed, dict) and listed.get("events") == []
+              and "damaged" in listed.get("warning", ""), f"got {listed}")
+
         undo = parse(delete_history_entry({"dish_name": "dmg hist stew"}))
         check("undo says the history is damaged, not that the cook was never recorded",
               isinstance(undo, dict) and "damaged" in undo.get("error", ""), f"got {undo}")
@@ -1328,10 +1333,12 @@ def test_list_cooking_history_surfaces_corruption():
     try:
         (_TMP_DATA_DIR / "history.json").write_text("{not json", encoding="utf-8")
         res = parse(list_cooking_history({}))
-        # An empty list here would read as "you have never cooked anything",
-        # which is a different and much worse answer than "I cannot read this".
-        check("corrupt history surfaces as an error, not an empty log",
-              "error" in res, f"got {res}")
+        # A bare empty list here would read as "you have never cooked
+        # anything", which is a different and much worse answer than "I cannot
+        # read this". The warning is what tells the two apart.
+        check("corrupt history comes back empty, with a warning saying why",
+              isinstance(res, dict) and res.get("events") == []
+              and "damaged" in res.get("warning", ""), f"got {res}")
     finally:
         (_TMP_DATA_DIR / "history.json").write_text(original, encoding="utf-8")
 
