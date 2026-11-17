@@ -91,6 +91,7 @@ Retracts the **most recent** cook of a dish. This is the "undo" for `register_co
 - **When to use:**
   - The user says they registered a dish by mistake.
   - The user wants a dish to appear in suggestions again without waiting for the cooldown period.
+- **Directive:** if the meal didn't actually happen (registered by mistake, or they didn't end up cooking it), pass `restore_fridge: true`. The tool puts back exactly what that cook used, so don't add the ingredients back yourself. If they did cook it and only want it suggested again sooner, leave it out: those ingredients were really used. If the reply says nothing could be put back because the cook was recorded before the plugin noted what it used, offer to add the ingredients back with `update_fridge_inventory`.
 
 ### `list_cooking_history`
 

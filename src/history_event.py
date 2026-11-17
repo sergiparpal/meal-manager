@@ -50,6 +50,11 @@ class CookingEvent:
     ``retracted_at`` marks an event the user took back. Retraction is not
     deletion: the row stays in the log and remains visible through
     ``list_cooking_history``, it just stops counting toward the projection.
+
+    ``consumed`` names the fridge items this cook took a portion of, so that
+    taking it back can put exactly those back. ``None`` means it was not
+    recorded: cooks logged before the field existed, and migrated legacy
+    entries. An empty list means nothing was taken (only staples, say).
     """
 
     id: str
@@ -58,6 +63,7 @@ class CookingEvent:
     recorded_at: str
     backfilled: bool = False
     retracted_at: str | None = None
+    consumed: list[str] | None = None
 
     def __post_init__(self):
         if not isinstance(self.id, str) or not self.id.startswith(ID_PREFIX):
@@ -88,12 +94,22 @@ class CookingEvent:
                 self.retracted_at, label="retracted_at"
             )
 
+        if self.consumed is not None:
+            if not isinstance(self.consumed, (list, tuple)):
+                raise ValueError("consumed must be a list of ingredient names")
+            names = []
+            for name in self.consumed:
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError("consumed must be a list of ingredient names")
+                names.append(Dish.normalize_ingredient(name))
+            self.consumed = names
+
     @property
     def active(self) -> bool:
         return self.retracted_at is None
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "id": self.id,
             "dish_name": self.dish_name,
             "cooked_on": self.cooked_on,
@@ -101,6 +117,11 @@ class CookingEvent:
             "backfilled": self.backfilled,
             "retracted_at": self.retracted_at,
         }
+        # Only when recorded, so an event from before the field existed is
+        # written back exactly as it was read.
+        if self.consumed is not None:
+            data["consumed"] = list(self.consumed)
+        return data
 
     @classmethod
     def from_dict(cls, data) -> "CookingEvent":
@@ -108,7 +129,8 @@ class CookingEvent:
 
         Unknown and missing keys both raise: this is the read path for stored
         data we wrote ourselves, so a shape we do not recognize is corruption
-        to surface, not something to absorb with defaults.
+        to surface, not something to absorb with defaults. The one exception
+        is ``consumed``, which events recorded before it existed lack.
         """
         if not isinstance(data, dict):
             raise ValueError("cooking event must be an object")
@@ -123,7 +145,7 @@ class CookingEvent:
         missing = expected - set(data)
         if missing:
             raise ValueError(f"cooking event is missing keys: {sorted(missing)}")
-        unknown = set(data) - expected
+        unknown = set(data) - expected - {"consumed"}
         if unknown:
             raise ValueError(f"cooking event has unknown keys: {sorted(unknown)}")
         return cls(
@@ -133,4 +155,5 @@ class CookingEvent:
             recorded_at=data["recorded_at"],
             backfilled=data["backfilled"],
             retracted_at=data["retracted_at"],
+            consumed=data.get("consumed"),
         )

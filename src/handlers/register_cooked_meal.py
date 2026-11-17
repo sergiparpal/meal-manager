@@ -90,17 +90,23 @@ def HANDLER(args: dict, **kwargs):
         fridge_snapshot = fridge_repo.load_set()
         days_snapshot = days_since_last_cook()
 
-        # Read the projection before appending: this is what the response
-        # compares against to tell the user whether their cooldown moved.
-        projected_before = history_repo.load().get(name)
-        event = history_repo.append_event(name, cooked_iso, backfilled=backdated)
-        superseded = projected_before is not None and (
-            date.fromisoformat(projected_before) > cooked_on
-        )
-
         essentials = [
             ing for ing, is_essential in dish.ingredients.items() if is_essential
         ]
+
+        # Read the projection before appending: this is what the response
+        # compares against to tell the user whether their cooldown moved.
+        projected_before = history_repo.load().get(name)
+        # What the consume below will take is recorded with the cook, so that
+        # taking the cook back can put back exactly that. Both run inside this
+        # lock, so the prediction and the consume cannot disagree.
+        event = history_repo.append_event(
+            name, cooked_iso, backfilled=backdated,
+            consumed=fridge_repo.consumable(essentials),
+        )
+        superseded = projected_before is not None and (
+            date.fromisoformat(projected_before) > cooked_on
+        )
 
         try:
             consumed = fridge_repo.consume(essentials)

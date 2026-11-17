@@ -22,7 +22,9 @@ SCHEMA = {
         "the dish name, the date it was cooked, when it was recorded, whether "
         "it was backfilled (recorded after the fact), and its status — "
         "'retracted' rows were taken back by the user and no longer count "
-        "toward the recency cooldown, but are still on record. If the history "
+        "toward the recency cooldown, but are still on record. Cooks recorded "
+        "since the plugin started noting it also list what they took from the "
+        "fridge, as 'consumed'. If the history "
         "file is damaged, the list is empty and a 'warning' says so: tell the "
         "user, and don't say they have never cooked anything."
     ),
