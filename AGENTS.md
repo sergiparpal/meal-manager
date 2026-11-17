@@ -124,7 +124,7 @@ python3 -c "import sys, importlib, pathlib; sys.path.insert(0, str(pathlib.Path(
 
 ## Persistence
 
-- Use `atomic_write_json` from `src/__init__.py` for every JSON write. It keeps a target that holds no valid JSON aside (`<name>.unreadable-<UTC time>`) before replacing it, so a damaged file is never lost to the next save; pass `keep_unreadable=False` only for reconstructable files such as DII session backups.
+- Use `atomic_write_json` from `src/__init__.py` for every JSON write. It keeps a target that holds no valid JSON aside (`<name>.unreadable-<UTC time>`) before replacing it, so a damaged file is never lost to the next save; pass `keep_unreadable=False` only for reconstructable files such as DII session backups. Pass `target_damaged=True` when the caller has already found the target unusable although it parses as JSON; the history log does, for a log of the wrong shape.
 - Keep persisted file formats stable.
 - Create parent directories lazily when needed, not at import time.
 - Treat missing or malformed JSON files as empty state unless the caller needs an explicit error. "Malformed" includes valid JSON of the wrong *shape* — check `isinstance` before reading attributes off parsed data. A DII session backup containing an array raised `AttributeError` out of the orphan sweep and took down every DII tool, including the sweep that would have cleaned it up.

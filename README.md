@@ -483,7 +483,7 @@ meal-manager/
 - A missing or corrupt file falls back to a fresh initialized state, reproducing the classic 60/40 blend.
 - The state carries a `version`. When the scoring geometry changes, the version is bumped and any file written under the old geometry is discarded on load — accumulated reward mass from a different score model is not comparable. The learner simply restarts from the 60/40 anchor.
 
-**A damaged file** (not valid JSON, say after a broken hand edit) is read as empty rather than taking the plugin down, and `list_dishes` and `list_fridge` say so. The next write keeps it next to the new one as `<name>.unreadable-<UTC time>` instead of writing over it, so whatever it held can be recovered by hand.
+**A damaged file** (not valid JSON, say after a broken hand edit) is read as empty rather than taking the plugin down, and `list_dishes` and `list_fridge` say so. The next write keeps it next to the new one as `<name>.unreadable-<UTC time>` instead of writing over it, so whatever it held can be recovered by hand. The cooking history goes one step further: a `history.json` that parses but cannot be used, which one date typed by hand is enough for, is kept the same way. `get_meal_suggestions` and `register_cooked_meal` then say so, because the suggestions no longer know what was cooked recently.
 
 ---
 

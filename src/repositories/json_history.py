@@ -86,6 +86,23 @@ class JsonHistoryRepository:
                 projected[event.dish_name] = event.cooked_on
         return projected
 
+    def damaged(self) -> bool:
+        """True when the file exists but does not hold a usable event log.
+
+        That is invalid JSON, and also valid JSON of the wrong shape: an event
+        with a field missing, a date typed by hand, a ``schema_version`` this
+        code does not know. Either way the log reads as empty, so every
+        cooldown is lost: the tools that rank or undo cooks say so, and
+        ``append_event`` keeps the file aside instead of writing over it. A
+        file that cannot be opened at all is not counted, as in
+        ``unreadable_json``.
+        """
+        try:
+            self._parse()
+        except HistoryDataError as exc:
+            return not isinstance(exc.__cause__, OSError)
+        return False
+
     # -- writing ------------------------------------------------------------
 
     def append_event(
@@ -98,6 +115,11 @@ class JsonHistoryRepository:
         """Record a cook and return the stored event."""
         value = cooked_on if isinstance(cooked_on, str) else cooked_on.isoformat()
         with self._lock:
+            # A damaged log loads as empty, so saving the new event wrote over
+            # every cook it held. atomic_write_json only keeps a file that is
+            # not JSON at all; a log of the wrong shape, such as one event with
+            # a hand-typed date, has to be named here.
+            damaged = self.damaged()
             events = self.load_events()
             event = CookingEvent(
                 id=new_event_id(),
@@ -107,7 +129,7 @@ class JsonHistoryRepository:
                 backfilled=bool(backfilled),
             )
             events.append(event)
-            self._save(events)
+            self._save(events, damaged=damaged)
             return event
 
     def retract_event(self, event_id: str) -> CookingEvent | None:
@@ -183,13 +205,17 @@ class JsonHistoryRepository:
 
     # -- internals ----------------------------------------------------------
 
-    def _save(self, events: list[CookingEvent]) -> None:
+    def _save(self, events: list[CookingEvent], *, damaged: bool = False) -> None:
+        # Only append_event can find a damaged log here: the other writers
+        # look for an event to change, find none in an empty log, and return
+        # without saving.
         atomic_write_json(
             self.path,
             {
                 "schema_version": HISTORY_SCHEMA_VERSION,
                 "events": [event.to_dict() for event in events],
             },
+            target_damaged=damaged,
         )
 
     def _parse(self) -> list[CookingEvent]:

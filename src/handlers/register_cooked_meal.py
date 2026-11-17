@@ -79,6 +79,11 @@ def HANDLER(args: dict, **kwargs):
         if dish is None:
             raise LookupError(f"'{raw_name}' is not in the recipe catalog.")
 
+        # A damaged history reads as empty. The append below keeps the file
+        # aside and starts a new log with this cook, which the user has to hear
+        # about: every earlier meal stops counting toward the cooldown.
+        history_damaged = history_repo.damaged()
+
         # Snapshot the decision state as it was at the moment the user chose to
         # cook — before history and fridge are mutated below. The learning
         # update at the end replays the ranking against this snapshot.
@@ -114,8 +119,10 @@ def HANDLER(args: dict, **kwargs):
         # Skipped for backdated cooks: the snapshot above reflects today's
         # fridge and history, not the state at the time the meal was actually
         # cooked, so replaying it would teach the learner from a decision that
-        # never happened.
-        if not backdated:
+        # never happened. Skipped as well when the history was damaged: the
+        # snapshot then lacks every earlier cook, the same kind of state that
+        # never existed.
+        if not backdated and not history_damaged:
             try:
                 state = tuning_repo.load()
                 rewards = tuning.compute_rewards(
@@ -149,6 +156,16 @@ def HANDLER(args: dict, **kwargs):
         )
     else:
         history_msg = ""
+    if history_damaged:
+        damaged_msg = (
+            " The cooking history file (history.json) was damaged and could not"
+            " be read, so this meal starts a new history: earlier meals no longer"
+            " count toward suggestions. The damaged file was kept aside, as"
+            " history.json.unreadable-<time>. Tell the user."
+        )
+    else:
+        damaged_msg = ""
     return (
-        f"Registered '{dish.name}' as cooked on {cooked_iso}.{removed_msg}{history_msg}"
+        f"Registered '{dish.name}' as cooked on {cooked_iso}."
+        f"{removed_msg}{history_msg}{damaged_msg}"
     )

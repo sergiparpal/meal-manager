@@ -77,6 +77,10 @@ class HistoryRepository(Protocol):
     the projection. ``delete_event`` is the hard delete reserved for rollback,
     where a cook that failed halfway must leave no trace at all.
 
+    ``damaged()`` is true while the file holds no usable log, which every read
+    takes as an empty history; ``append_event`` then keeps the file aside
+    before writing a new one.
+
     The repository owns its own locking — callers do not hold it.
     """
 
@@ -84,6 +88,7 @@ class HistoryRepository(Protocol):
 
     def load(self) -> dict[str, str]: ...
     def load_events(self, *, strict: bool = False) -> list: ...
+    def damaged(self) -> bool: ...
     def append_event(
         self,
         dish_name: str,
