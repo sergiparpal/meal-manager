@@ -157,7 +157,7 @@ The data directory is injectable via `src.repositories.configure(data_dir)` — 
 
 `ci-complete` (`.github/workflows/tests.yml`) is a single aggregating job that fails unless `tests`, `types`, and `coverage` all succeeded. **Any new job must be added to its `needs:` list**, or it silently stops gating anything. The ruleset requires that one stable name rather than the individual matrix legs on purpose: a dropped Python version would otherwise become a required check that never reports again and blocks every merge permanently.
 
-`.github/workflows/semantic-diff-weaver.yml` is not part of that gate, on purpose: it is a field test of semantic-diff-weaver, which comments on each pull request what the change does in behavior and what to test, and keeps the analysis as an artifact. It is advisory, so it stays outside `ci-complete`'s `needs:`.
+`.github/workflows/semantic-diff-weaver.yml` is not part of that gate, on purpose: it is a field test of semantic-diff-weaver, which comments on each pull request what the change does in behavior and what to test, and keeps the analysis as an artifact. It is advisory, so it stays outside `ci-complete`'s `needs:`. A pull request from a fork gets no comment, only the job summary and the artifact: its token is read-only, so posting would fail the job, and the contributor never opted into the review.
 
 GitHub Actions are pinned to **full commit SHAs** with a trailing `# vX.Y.Z` comment, never to tags — a tag can be repointed by its upstream owner, a commit SHA cannot. Keep new `uses:` lines pinned the same way.
 
