@@ -2,7 +2,8 @@ name: semantic-diff-weaver
 
 # Field test of semantic-diff-weaver: on each pull request it comments what the change does in
 # behavior and what to test, and keeps the analysis as an artifact so that each finding can be
-# judged afterwards. Advisory only: it is deliberately outside ci-complete and gates nothing.
+# judged afterwards. A pull request from a fork gets no comment, only the job summary and the
+# artifact. Advisory only: it is deliberately outside ci-complete and gates nothing.
 on:
   pull_request:
 
@@ -33,6 +34,10 @@ jobs:
             __init__.py
             src/**/*.py
           fail-on: none
+          # A fork's pull request gets a read-only token too, so posting the comment would fail
+          # the job, and its author never chose this review: the analysis stays in the job
+          # summary and the artifact.
+          comment: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.weaver.outputs.analysis != ''
         with:
