@@ -1250,6 +1250,79 @@ def test_tool_handler_sanitizes_envelope():
           res2 == {"error": "ingredients cannot be empty"}, f"got {res2}")
 
 
+def test_tool_handler_log_levels():
+    print("\n-- tool_handler (how each error is logged) --")
+    import json as _json
+    import logging
+
+    records: list[logging.LogRecord] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    pending: list[BaseException] = []
+
+    @_handlers_common.tool_handler("log_probe", {"type": "object", "properties": {}})
+    def probe(args, **kwargs):
+        raise pending.pop()
+
+    def logs_for(exc=None, args=None):
+        if exc is not None:
+            pending.append(exc)
+        records.clear()
+        probe({} if args is None else args)
+        pending.clear()
+        return [(logging.getLevelName(r.levelno), bool(r.exc_info)) for r in records]
+
+    try:
+        _json.loads("{oops")
+        decode_exc = None
+    except _json.JSONDecodeError as exc:
+        decode_exc = exc
+
+    # tool_handler logs under the hardcoded meal_manager.handlers namespace;
+    # DEBUG is enabled here so the traceback kept for debug logging shows.
+    handlers_logger = logging.getLogger("meal_manager.handlers")
+    previous_level = handlers_logger.level
+    collector = _Collect(level=logging.DEBUG)
+    handlers_logger.addHandler(collector)
+    handlers_logger.setLevel(logging.DEBUG)
+    try:
+        deliberate = [("WARNING", False), ("DEBUG", True)]
+        got = logs_for(ValueError("ingredients cannot be empty"))
+        check("a deliberate ValueError is one WARNING line, traceback only at DEBUG",
+              got == deliberate, f"got {got}")
+        message = records[0].getMessage() if records else ""
+        check("the WARNING line names the tool and carries the message",
+              "log_probe" in message and "ingredients cannot be empty" in message,
+              f"got {message!r}")
+        got = logs_for(LookupError("'paella' is not in the recipe catalog."))
+        check("a deliberate LookupError is one WARNING line", got == deliberate,
+              f"got {got}")
+        got = logs_for(args={"bogus": 1})
+        check("a rejected argument is one WARNING line", got == deliberate,
+              f"got {got}")
+
+        # Subclasses of the two come from a data file or from a bug, never
+        # from a handler turning a call down, so they keep the traceback.
+        for label, exc in [
+            ("KeyError", KeyError("ingredients")),
+            ("IndexError", IndexError("list index out of range")),
+            ("JSONDecodeError", decode_exc),
+            ("HistoryDataError", _repos_mod.HistoryDataError("not an event log")),
+            ("OSError", PermissionError(13, "Permission denied", "/srv/data/dishes.json")),
+            ("DataLockTimeout", _filelock_mod.DataLockTimeout("The meal data is busy")),
+            ("RuntimeError", RuntimeError("boom")),
+        ]:
+            got = logs_for(exc)
+            check(f"{label} is still an ERROR with its traceback",
+                  got == [("ERROR", True)], f"got {got}")
+    finally:
+        handlers_logger.removeHandler(collector)
+        handlers_logger.setLevel(previous_level)
+
+
 def test_tool_handler_validates_against_schema():
     print("\n-- tool_handler (schema-derived validation) --")
     schema = {"type": "object", "properties": {"a": {"type": "string"}}}
@@ -2322,6 +2395,7 @@ def _run_all():
     run(test_tool_handler_validates_against_schema)
     run(test_safe_error_message)
     run(test_tool_handler_sanitizes_envelope)
+    run(test_tool_handler_log_levels)
 
     run(test_tuning_initial_state)
     run(test_tuning_deployed_weights_fallback)
