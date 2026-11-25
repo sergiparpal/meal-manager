@@ -1651,9 +1651,27 @@ def test_merge_ingredient_alias_unlocks_a_dish():
 def test_merge_ingredient_alias_errors():
     print("\n-- merge_ingredient_alias (errors) --")
     _clear_aliases()
-    res = parse(merge_ingredient_alias({"from_name": "al_same", "to_name": "al_same"}))
+    records: list[logging.LogRecord] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    # Two spellings of one name, as when an agent asked to merge "Tomate" and
+    # "tomate" did in an E2E run. The tool turns the call down: a warning, not
+    # an ERROR with a traceback among the plugin's real faults.
+    handlers_logger = logging.getLogger("meal_manager.handlers")
+    collector = _Collect(level=logging.WARNING)
+    handlers_logger.addHandler(collector)
+    try:
+        res = parse(merge_ingredient_alias({"from_name": "Al_Same", "to_name": "al_same"}))
+    finally:
+        handlers_logger.removeHandler(collector)
     check("merging a name onto itself errors",
           "error" in res and "already the canonical" in res["error"], f"got {res}")
+    check("and is logged as one WARNING line, without a traceback",
+          [(r.levelname, bool(r.exc_info)) for r in records] == [("WARNING", False)],
+          f"got {[(r.levelname, r.getMessage()) for r in records]}")
 
     merge_ingredient_alias({"from_name": "al_x", "to_name": "al_y"})
     # `from_name` resolves through the alias map too, so a repeat merge lands on

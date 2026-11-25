@@ -49,7 +49,8 @@ def _safe_error_message(exc: BaseException) -> str:
     point — an unanticipated exception type is exactly the case where
     ``str(exc)`` is most likely to publish something we did not mean to.
 
-    Full detail is still logged by the caller via ``logger.exception``.
+    Whatever this replaces still reaches the log in full: the caller logs it
+    with ``logger.exception``.
     """
     # JSONDecodeError subclasses ValueError, so it must be tested first or it
     # would never match.
@@ -66,6 +67,20 @@ def _safe_error_message(exc: BaseException) -> str:
     if isinstance(exc, OSError):
         return "Storage is temporarily unavailable"
     return "An internal error occurred"
+
+
+def _is_deliberate_error(exc: BaseException) -> bool:
+    """Whether a handler raised *exc* on purpose, to turn the call down.
+
+    Handlers raise ``ValueError`` and ``LookupError`` with wording written for
+    the user: an argument they cannot accept, a dish that is not in the
+    catalog, an alias that is already the canonical name. Only those exact
+    types count, because their subclasses mean something else: a
+    ``JSONDecodeError`` or a ``HistoryDataError`` is a data file that could not
+    be read, and a ``KeyError`` or an ``IndexError``, which nothing in the
+    plugin raises on purpose, is a failed lookup in the code: a bug.
+    """
+    return type(exc) in (ValueError, LookupError)
 
 
 def reject_unknown_args(args: dict, allowed: set[str]) -> None:
@@ -88,9 +103,13 @@ def tool_handler(name: str, schema: dict | None = None, *, extra_args: set | Non
 
     The wrapped function returns a Python object (dict, list, str, ...). On
     success it is encoded with ``json.dumps(..., ensure_ascii=False)``. Any
-    exception is logged via ``logger.exception`` and surfaced as
-    ``{"error": ...}`` so all tool errors share one shape; the message itself
-    goes through :func:`_safe_error_message`.
+    exception is surfaced as ``{"error": ...}`` so all tool errors share one
+    shape; the message itself goes through :func:`_safe_error_message`.
+
+    A deliberate error (:func:`_is_deliberate_error`) is logged as one WARNING
+    line: the tool turned the call down and said why, which is the tool
+    working, not failing. Anything else is logged with ``logger.exception``,
+    traceback included.
 
     When *schema* is supplied, incoming ``args`` keys are validated against
     ``schema["properties"]`` (widened by *extra_args*) before the handler runs.
@@ -113,7 +132,16 @@ def tool_handler(name: str, schema: dict | None = None, *, extra_args: set | Non
                     reject_unknown_args(args, allowed)
                 return json.dumps(fn(args, **kwargs), ensure_ascii=False)
             except Exception as exc:
-                log.exception("%s failed", name)
+                if _is_deliberate_error(exc):
+                    # Its message says everything, and a traceback would only
+                    # point at the raise. Hermes keeps WARNING and up in
+                    # errors.log, so the line still shows there, but no longer
+                    # as one of the plugin's faults. The traceback stays
+                    # available to debug logging.
+                    log.warning("%s returned an error: %s", name, exc)
+                    log.debug("%s error traceback", name, exc_info=True)
+                else:
+                    log.exception("%s failed", name)
                 return json.dumps(
                     {"error": _safe_error_message(exc)}, ensure_ascii=False
                 )
