@@ -62,6 +62,7 @@ The result is a system that offers the user the freedom of conversation while gu
 
 - **Python 3.12** or newer installed on your system.
 - No package manager or virtual environment is required to *run* the plugin — it has zero external runtime dependencies. (Contributors who want to run the type, lint, or coverage checks locally do need a virtualenv for those tools; see the CI section.)
+- **A model that follows the skill.** Meal Manager v0.4.0 was tested end to end on Hermes v0.23.1 through the ChatGPT Codex subscription, in twelve scripted conversations: a first dinner, saving and correcting recipes, shopping, cooking, and deleting. GPT-6.1 Terra and GPT-6.1 Sol got all twelve right at low, medium and high reasoning. A smaller model is not recommended: GPT-6 Luna, in the same conversations, sometimes saved an ingredient a second time under another spelling, such as "tomate" next to "tomates", and once deleted a recipe without asking first. Other providers have not been tested.
 
 ### Installation
 
